@@ -21,6 +21,8 @@ const GenerateSingleArticleSectionInputSchema = z.object({
   totalSections: z.number().describe('The total number of sections in the outline.'),
   previousSectionsContent: z.string().optional().describe('Content of the previously generated sections for context (optional).'),
   isFirstSection: z.boolean().describe('Indicates if this is the very first section being generated (to use the detailed initial prompt).'),
+  // Added displayIndex to be passed to the prompt
+  displayIndex: z.number().describe('The human-readable index (1-based) of the current section.'),
 });
 export type GenerateSingleArticleSectionInput = z.infer<
   typeof GenerateSingleArticleSectionInputSchema
@@ -36,9 +38,12 @@ export type GenerateSingleArticleSectionOutput = z.infer<
 >;
 
 export async function generateSingleArticleSection(
-  input: GenerateSingleArticleSectionInput
+  input: Omit<GenerateSingleArticleSectionInput, 'displayIndex'> // Exclude displayIndex from external caller input
 ): Promise<GenerateSingleArticleSectionOutput> {
-  return generateSingleArticleSectionFlow(input);
+   // Calculate displayIndex inside the wrapper before calling the flow
+   const displayIndex = input.sectionIndex + 1;
+   const flowInput = {...input, displayIndex};
+  return generateSingleArticleSectionFlow(flowInput);
 }
 
 
@@ -46,7 +51,7 @@ export async function generateSingleArticleSection(
 const firstSectionPrompt = ai.definePrompt({
   name: 'generateFirstArticleSectionPrompt',
   input: {
-    schema: GenerateSingleArticleSectionInputSchema,
+    schema: GenerateSingleArticleSectionInputSchema, // Includes displayIndex now
   },
   output: {
     schema: GenerateSingleArticleSectionOutputSchema,
@@ -56,7 +61,7 @@ const firstSectionPrompt = ai.definePrompt({
 The article title is: "{{{title}}}".
 The main focus key phrase is: "{{{focusKeyPhrase}}}".
 
-We are starting with the **first** section (section 1 of {{totalSections}}).
+We are starting with the **first** section (section {{{displayIndex}}} of {{totalSections}}).
 The topic for THIS first section is: "{{{sectionTopic}}}".
 
 Write ONLY the content for this first section "{{{sectionTopic}}}".
@@ -74,16 +79,17 @@ Content for Section "{{{sectionTopic}}}":`,
 const subsequentSectionPrompt = ai.definePrompt({
   name: 'generateSubsequentArticleSectionPrompt',
   input: {
-    schema: GenerateSingleArticleSectionInputSchema, // Still needs all context
+    schema: GenerateSingleArticleSectionInputSchema, // Still needs all context, including displayIndex
   },
   output: {
     schema: GenerateSingleArticleSectionOutputSchema,
   },
   // Simpler prompt for subsequent sections, relying on context and previous style
+  // Use {{{displayIndex}}} instead of {{add sectionIndex 1}}
   prompt: `Ok, let's continue with the article titled "{{{title}}}".
 Focus Key Phrase: "{{{focusKeyPhrase}}}".
 
-We are now working on section number {{add sectionIndex 1}} of {{totalSections}}.
+We are now working on section number {{{displayIndex}}} of {{totalSections}}.
 The topic for THIS specific section is: "{{{sectionTopic}}}".
 
 {{#if previousSectionsContent}}
@@ -103,23 +109,22 @@ Content for Section "{{{sectionTopic}}}":`,
 
 
 const generateSingleArticleSectionFlow = ai.defineFlow<
-  typeof GenerateSingleArticleSectionInputSchema,
+  typeof GenerateSingleArticleSectionInputSchema, // Flow now expects displayIndex
   typeof GenerateSingleArticleSectionOutputSchema
 >(
   {
     name: 'generateSingleArticleSectionFlow',
-    inputSchema: GenerateSingleArticleSectionInputSchema,
+    inputSchema: GenerateSingleArticleSectionInputSchema, // Input schema includes displayIndex
     outputSchema: GenerateSingleArticleSectionOutputSchema,
   },
   async input => {
-    // Pre-calculate display index for Handlebars
-    const displayIndex = input.sectionIndex + 1;
-    const promptInput = {...input, displayIndex}; // Pass calculated index
+     // displayIndex is already calculated and included in 'input' passed to the flow
 
     // Choose the appropriate prompt based on whether it's the first section
     const selectedPrompt = input.isFirstSection ? firstSectionPrompt : subsequentSectionPrompt;
 
-    const {output} = await selectedPrompt(promptInput);
+    // Pass the input (which includes displayIndex) to the selected prompt
+    const {output} = await selectedPrompt(input);
 
     // Ensure the output is not null or undefined before returning
     if (!output || !output.sectionContent) {
@@ -129,8 +134,4 @@ const generateSingleArticleSectionFlow = ai.defineFlow<
   }
 );
 
-// Helper registration is tricky with Genkit's serverless nature.
-// Pre-calculating values like `displayIndex` and passing them in the input
-// is the most reliable approach instead of relying on Handlebars helpers.
-// The `{{add sectionIndex 1}}` syntax might work if Genkit's Handlebars setup includes it,
-// but pre-calculation is safer. We added `displayIndex` to the `promptInput`.
+// No need for Handlebars helpers as displayIndex is passed directly.

@@ -72,7 +72,9 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
   const generateSection = useCallback(async (index: number) => {
     if (index >= totalSections || !outlineSections[index]) {
         console.log("Attempted to generate section beyond outline bounds.");
-        return; // Should not happen if logic is correct
+        isGeneratingRef.current = false; // Ensure flag is reset
+        setStatus('complete'); // Or error if appropriate, but complete if just ran out of sections
+        return;
     }
 
     const sectionTopic = outlineSections[index];
@@ -89,6 +91,7 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
         .filter(Boolean)
         .join('\n\n---\n\n');
 
+      // Input for the AI flow (displayIndex is calculated within the flow wrapper now)
       const input = {
         title: articleTitle,
         focusKeyPhrase: focusKeyPhrase,
@@ -96,7 +99,7 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
         sectionIndex: index,
         totalSections: totalSections,
         previousSectionsContent: previousContent || undefined,
-        isFirstSection: isFirst, // Pass flag to select the correct prompt
+        isFirstSection: isFirst,
       };
       console.log("Generating section with input:", input);
 
@@ -116,7 +119,7 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
       });
 
       // Check if this was the last section
-      if (index + 1 === totalSections) {
+      if (index + 1 >= totalSections) {
           console.log("All sections generated.");
           setStatus('complete');
           isGeneratingRef.current = false; // Allow next action
@@ -137,14 +140,15 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
         variant: "destructive",
         title: `Generation Failed (Section ${index + 1})`,
         description: `Could not generate section "${sectionTopic}". ${message}`,
+        duration: 9000, // Show longer
       });
     }
-  }, [totalSections, outlineSections, articleTitle, focusKeyPhrase, generatedSections, toast]); // Removed status from dependencies
+  }, [totalSections, outlineSections, articleTitle, focusKeyPhrase, generatedSections, toast]); // Removed status, added onProceedToVoiceOver
 
 
   // Starts the automatic generation process
   const startGeneration = () => {
-      if (isGeneratingRef.current || status !== 'idle' || totalSections === 0) {
+      if (isGeneratingRef.current || status === 'generating_first' || status === 'generating_subsequent' || totalSections === 0) {
           console.log("Generation already in progress, completed, or no sections.");
           return;
       }
@@ -152,6 +156,7 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
       isGeneratingRef.current = true; // Set flag
       setGeneratedSections({}); // Reset previous results
       setCurrentSectionIndex(0); // Start from the beginning
+      setErrorMsg(null); // Clear any previous error message
       generateSection(0); // Trigger the first section generation
   };
 
@@ -213,15 +218,17 @@ const SectionGenerator: React.FC<SectionGeneratorProps> = ({
     } else if (status === 'error') {
         buttonText = "Retry Generation";
         buttonIcon = <Play className="mr-2 h-4 w-4" />;
-        buttonAction = () => { // Reset state and restart from failed section
+        buttonAction = () => { // Reset state and restart
             if (isGeneratingRef.current) return; // Prevent clicks during restart
+            console.log("Retrying generation...");
             isGeneratingRef.current = true;
-             setStatus('idle'); // Reset status temporarily
-             setErrorMsg(null);
-             // Decide where to restart from, e.g., the failed index
-             // For simplicity, let's restart from the beginning for now, but could be smarter
-             startGeneration();
-             // OR: generateSection(currentSectionIndex); // To retry the failed one
+            setStatus('idle'); // Reset status temporarily before starting
+            setErrorMsg(null);
+            setGeneratedSections({}); // Reset generated content on full retry
+            setCurrentSectionIndex(0); // Reset index on full retry
+            // For simplicity, let's restart from the beginning.
+            // Could implement resuming from the failed index if needed.
+            setTimeout(() => generateSection(0), 100); // Start generation again
          };
         isButtonDisabled = false; // Enable retry button
     }
