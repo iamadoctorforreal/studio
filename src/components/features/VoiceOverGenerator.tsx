@@ -32,9 +32,7 @@ const formSchema = z.object({
     .max(500000, { // Max length from UnrealSpeech docs
         message: "Article text exceeds the maximum allowed length (500,000 characters)."
     }),
-  // Add optional fields from the flow input if you want to control them via UI
-  // voiceId: z.string().optional(),
-  // bitrate: z.string().optional(),
+  // Keep form schema simple, voice/bitrate controlled internally for now
 });
 
 type VoiceOverFormValues = z.infer<typeof formSchema>;
@@ -53,9 +51,6 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     resolver: zodResolver(formSchema),
     defaultValues: {
       articleText: initialArticleText || "", // Ensure default is string
-      // Initialize optional fields if added to the form
-      // voiceId: 'Liv',
-      // bitrate: '192k',
     },
   });
 
@@ -79,12 +74,11 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
       });
 
     try {
-      // Construct the input for the flow, including optional fields if they exist in the form
+      // Construct the input for the flow, HARDCODING voiceId and bitrate as requested
       const flowInput: GenerateVoiceOverAudioInput = {
         articleText: values.articleText,
-         // Pass optional values if they are part of the form state
-         // voiceId: values.voiceId || undefined, // Pass if form has voiceId field
-         // bitrate: values.bitrate || undefined, // Pass if form has bitrate field
+        voiceId: 'Sierra', // Hardcoded as requested
+        bitrate: '320k',   // Hardcoded as requested
       };
 
       console.log("Calling generateVoiceOverAudio flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' }); // Log sanitized input
@@ -166,7 +160,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                     </FormItem>
                     )}
                 />
-                 {/* Optional: Add fields for VoiceId, Bitrate here if needed */}
+                 {/* Optional: Add UI fields for VoiceId, Bitrate here if needed */}
 
                 <Button
                      type="submit"
@@ -235,5 +229,3 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
 };
 
 export default VoiceOverGenerator;
-
-    
