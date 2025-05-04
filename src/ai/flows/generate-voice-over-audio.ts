@@ -1,56 +1,69 @@
 'use server';
 
 /**
- * @fileOverview A voice-over audio generation AI agent using Google Cloud Text-to-Speech API.
+ * @fileOverview A voice-over audio generation AI agent using UnrealSpeech API.
  *
  * - generateVoiceOverAudio - A function that generates voice-over audio from the formatted article.
  * - GenerateVoiceOverAudioInput - The input type for the generateVoiceOverAudio function.
  * - GenerateVoiceOverAudioOutput - The return type for the generateVoiceOverAudio function.
  *
- * NOTE: This flow requires Google Cloud Text-to-Speech API to be enabled in your project
- * and proper authentication configured (e.g., via GOOGLE_APPLICATION_CREDENTIALS environment variable
- * or Application Default Credentials).
+ * NOTE: This flow uses the UnrealSpeech API (https://docs.v8.unrealspeech.com).
+ * It requires an API key.
  */
 
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
-import { TextToSpeechClient } from '@google-cloud/text-to-speech';
+// Removed Google Cloud Text-to-Speech import
+
+// --- Constants ---
+const UNREALSPEECH_API_KEY = process.env.UNREALSPEECH_API_KEY || '8wVOSocqw9y9XjY07PCFjeD2ezLZgAULrXjcc0VeGnWR4Qdz5Kg7E1'; // Use environment variable or fallback to the provided key
+const UNREALSPEECH_API_BASE_URL = 'https://api.v8.unrealspeech.com/api/v1';
+const POLLING_INTERVAL_MS = 3000; // Poll every 3 seconds
+const MAX_POLLING_ATTEMPTS = 20; // Maximum polling attempts (e.g., 20 * 3s = 1 minute timeout)
 
 const GenerateVoiceOverAudioInputSchema = z.object({
   articleText: z
     .string()
-    .min(1, "Article text cannot be empty.") // Basic validation
+    .min(1, "Article text cannot be empty.")
     .describe('The formatted article text to generate voice-over audio from.'),
-  // Optional: Add parameters for voice selection, speed, pitch etc. if needed
-  // voiceName: z.string().optional().describe('Optional voice name (e.g., en-US-Wavenet-D)'),
-  // speakingRate: z.number().optional().min(0.25).max(4.0).describe('Optional speaking rate (0.25 to 4.0)'),
-  // pitch: z.number().optional().min(-20.0).max(20.0).describe('Optional pitch (-20.0 to 20.0)'),
+  voiceId: z.string().optional().default('Liv').describe('UnrealSpeech Voice ID (e.g., Dan, Will, Liv, Amy)'),
+  // bitrate: z.string().optional().default('192k').describe('Audio bitrate (e.g., 192k, 128k)'),
+  // speed: z.number().optional().default(0).min(-1.0).max(1.0).describe('Playback speed adjustment (-1.0 to 1.0)'),
+  // pitch: z.number().optional().default(1.0).min(0.0).max(2.0).describe('Voice pitch (0.0 to 2.0)'),
 });
 export type GenerateVoiceOverAudioInput = z.infer<typeof GenerateVoiceOverAudioInputSchema>;
 
 const GenerateVoiceOverAudioOutputSchema = z.object({
-  audioDataUri: z.string().describe('The generated voice-over audio as a base64 data URI (e.g., data:audio/mp3;base64,...).'),
+  audioDataUri: z.string().describe('The generated voice-over audio as a base64 data URI (e.g., data:audio/mpeg;base64,...).'),
 });
 export type GenerateVoiceOverAudioOutput = z.infer<typeof GenerateVoiceOverAudioOutputSchema>;
 
-
 /**
- * Helper function to convert Buffer to Data URI
- * @param buffer The audio buffer received from the API.
- * @param mimeType The MIME type of the audio (e.g., 'audio/mp3').
+ * Helper function to convert ArrayBuffer to Data URI
+ * @param buffer The audio ArrayBuffer received from the download.
+ * @param mimeType The MIME type of the audio (e.g., 'audio/mpeg').
  * @returns The data URI string.
  */
-function bufferToDataURI(buffer: Buffer | Uint8Array, mimeType: string): string {
+function bufferToDataURI(buffer: ArrayBuffer, mimeType: string): string {
     const base64String = Buffer.from(buffer).toString('base64');
     return `data:${mimeType};base64,${base64String}`;
 }
+
+/**
+ * Helper function to introduce delays.
+ * @param ms Milliseconds to wait.
+ */
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 
 export async function generateVoiceOverAudio(
   input: GenerateVoiceOverAudioInput
 ): Promise<GenerateVoiceOverAudioOutput> {
   // Validate input using Zod before calling the flow
-   const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
+  const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
+  if (!UNREALSPEECH_API_KEY) {
+      throw new Error('UnrealSpeech API key is not configured. Please set the UNREALSPEECH_API_KEY environment variable.');
+  }
   return generateVoiceOverAudioFlow(validatedInput);
 }
 
@@ -67,98 +80,153 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
     if (!input.articleText || input.articleText.trim().length === 0) {
         throw new Error('Article text cannot be empty.');
     }
+    if (!UNREALSPEECH_API_KEY) {
+      throw new Error('UnrealSpeech API key is missing.'); // Should be caught earlier, but double-check
+    }
 
-    console.log(`Starting generateVoiceOverAudioFlow for text starting with: "${input.articleText.substring(0, 50)}..."`);
-    console.log("Attempting to initialize Google Cloud Text-to-Speech client...");
+    console.log(`Starting UnrealSpeech TTS Flow for text starting with: "${input.articleText.substring(0, 50)}..." using voice: ${input.voiceId}`);
 
-    let client: TextToSpeechClient | null = null;
+    let synthesisTaskId: string | null = null;
+
     try {
-        // Creates a client
-        client = new TextToSpeechClient();
-        console.log("Google Cloud Text-to-Speech client initialized successfully.");
+        // --- Step 1: Create Synthesis Task ---
+        console.log("Calling UnrealSpeech API: Create Synthesis Task...");
+        const createResponse = await fetch(`${UNREALSPEECH_API_BASE_URL}/synthesisTasks`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${UNREALSPEECH_API_KEY}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                Text: input.articleText,
+                VoiceId: input.voiceId || 'Liv', // Default to Liv if not provided
+                // Bitrate: input.bitrate || '192k',
+                // Speed: input.speed || 0,
+                // Pitch: input.pitch || 1.0,
+                OutputFormat: 'mp3' // Request MP3 format
+            }),
+        });
 
-        // Construct the request
-        const request = {
-            input: { text: input.articleText },
-            // Select the language code and SSML voice gender (optional)
-            // See https://cloud.google.com/text-to-speech/docs/voices for available voices
-            voice: { languageCode: 'en-US', name: 'en-US-Neural2-C', ssmlGender: 'FEMALE' as const }, // Example voice
-            // select the type of audio encoding
-            audioConfig: { audioEncoding: 'MP3' as const }, // Using MP3 encoding
-        };
-
-        // Performs the text-to-speech request
-        console.log("Calling Google Cloud Text-to-Speech API (synthesizeSpeech)...");
-        const [response] = await client.synthesizeSpeech(request);
-        console.log("Google Cloud TTS API response received.");
-
-        if (!response.audioContent) {
-            console.error("Google Cloud TTS API returned no audio content.");
-            throw new Error('Google Cloud TTS API returned no audio content.');
+        if (!createResponse.ok) {
+            const errorBody = await createResponse.text();
+            console.error(`UnrealSpeech API Error (Create Task - ${createResponse.status}): ${errorBody}`);
+            throw new Error(`UnrealSpeech API failed to create task (${createResponse.status}): ${errorBody || createResponse.statusText}`);
         }
 
-        // The response's audioContent is binary buffer or base64 string depending on client version/config
-        // Ensure it's a Buffer for consistent handling
-        const audioBuffer = Buffer.from(response.audioContent as string | Uint8Array);
+        const createTaskResult = await createResponse.json();
+        synthesisTaskId = createTaskResult?.SynthesisTask?.SynthesisTaskId;
 
-        if (audioBuffer.length === 0) {
-            console.error('Received empty audio buffer from Google Cloud TTS API.');
-            throw new Error('Received empty audio buffer from Google Cloud TTS API. Generation likely failed.');
+        if (!synthesisTaskId) {
+             console.error("UnrealSpeech API did not return a SynthesisTaskId.", createTaskResult);
+             throw new Error('UnrealSpeech API did not return a Synthesis Task ID.');
+        }
+        console.log(`UnrealSpeech Synthesis Task created with ID: ${synthesisTaskId}`);
+
+        // --- Step 2: Poll for Task Completion ---
+        let attempts = 0;
+        let taskStatus: string | null = null;
+        let outputUri: string | null = null;
+
+        console.log("Polling UnrealSpeech API for task status...");
+        while (attempts < MAX_POLLING_ATTEMPTS) {
+            attempts++;
+            await delay(POLLING_INTERVAL_MS); // Wait before polling
+
+            console.log(`Polling attempt ${attempts}/${MAX_POLLING_ATTEMPTS} for task ${synthesisTaskId}...`);
+            const pollResponse = await fetch(`${UNREALSPEECH_API_BASE_URL}/synthesisTasks/${synthesisTaskId}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${UNREALSPEECH_API_KEY}`,
+                },
+            });
+
+            if (!pollResponse.ok) {
+                 // Handle potential 404 if task ID is wrong or temporary issues
+                 if (pollResponse.status === 404) {
+                    console.error(`UnrealSpeech API Error: Task ${synthesisTaskId} not found.`);
+                    throw new Error(`UnrealSpeech Synthesis Task ${synthesisTaskId} not found.`);
+                 }
+                const errorBody = await pollResponse.text();
+                console.warn(`UnrealSpeech API Polling Warning (${pollResponse.status}): ${errorBody}. Retrying...`);
+                // Continue polling on transient errors, but maybe add more specific error handling
+                 continue;
+            }
+
+            const pollResult = await pollResponse.json();
+            taskStatus = pollResult?.SynthesisTask?.TaskStatus;
+            outputUri = pollResult?.SynthesisTask?.OutputUri;
+
+            console.log(`Task ${synthesisTaskId} status: ${taskStatus}`);
+
+            if (taskStatus === 'Completed') {
+                if (!outputUri) {
+                    console.error("UnrealSpeech task completed but no OutputUri provided.", pollResult);
+                    throw new Error('UnrealSpeech task completed but did not provide an audio URL.');
+                }
+                console.log(`UnrealSpeech task completed. Audio URI: ${outputUri}`);
+                break; // Exit loop
+            } else if (taskStatus === 'Failed') {
+                 const failureReason = pollResult?.SynthesisTask?.FailureReason || 'Unknown reason';
+                 console.error(`UnrealSpeech task ${synthesisTaskId} failed. Reason: ${failureReason}`, pollResult);
+                 throw new Error(`UnrealSpeech task failed: ${failureReason}`);
+            }
+            // Continue polling if status is 'Pending' or 'Processing'
         }
 
-        console.log(`Received audio buffer of size: ${audioBuffer.length} bytes.`);
+        if (taskStatus !== 'Completed') {
+             console.error(`UnrealSpeech task ${synthesisTaskId} timed out after ${attempts} attempts.`);
+             throw new Error(`UnrealSpeech task timed out. Last status: ${taskStatus || 'Unknown'}.`);
+        }
 
-        // Convert the buffer to a base64 data URI
-        const audioDataUri = bufferToDataURI(audioBuffer, 'audio/mp3'); // Specify MP3 MIME type
+        // --- Step 3: Download Audio from OutputUri ---
+        if (!outputUri) {
+             // This case should technically be caught earlier, but safety check
+             throw new Error("Output URI is missing after task completion.");
+        }
+        console.log(`Downloading audio from UnrealSpeech OutputUri: ${outputUri}`);
+        const audioResponse = await fetch(outputUri);
+
+        if (!audioResponse.ok) {
+            const errorBody = await audioResponse.text();
+            console.error(`Failed to download audio from UnrealSpeech OutputUri (${audioResponse.status}): ${errorBody}`);
+            throw new Error(`Failed to download generated audio (${audioResponse.status}): ${errorBody || audioResponse.statusText}`);
+        }
+
+        // --- Step 4: Convert to Data URI ---
+        const audioArrayBuffer = await audioResponse.arrayBuffer();
+        if (audioArrayBuffer.byteLength === 0) {
+            console.error('Received empty audio buffer from UnrealSpeech download.');
+            throw new Error('Downloaded audio file is empty.');
+        }
+        console.log(`Received audio buffer of size: ${audioArrayBuffer.byteLength} bytes.`);
+
+        const audioDataUri = bufferToDataURI(audioArrayBuffer, 'audio/mpeg'); // UnrealSpeech provides MP3
         console.log("Successfully converted audio buffer to Data URI.");
 
         return { audioDataUri };
 
-    } catch (error: any) { // Catch 'any' to access error.code potentially
-        console.error('Error caught in generateVoiceOverAudioFlow (Google TTS):', error);
-        // Check for common authentication errors or other Google Cloud specific issues
-        let errorMessage = 'Failed to generate voice over audio using Google Cloud TTS.';
-        if (error instanceof Error) {
-           // Check for specific Google Cloud error messages/codes related to auth/permissions
-           const msg = error.message.toLowerCase();
-           const code = error.code; // GaxiosError might have a code property
+    } catch (error: any) {
+        console.error('Error caught in generateVoiceOverAudioFlow (UnrealSpeech):', error);
+        let errorMessage = 'Failed to generate voice over audio using UnrealSpeech.';
 
-           if (msg.includes('could not load the default credentials') ||
-               msg.includes('permission denied') ||
-               msg.includes('could not refresh access token') || // Explicit check for the reported error
-               msg.includes('request failed with status code 500') || // Often related to auth backend issues
-               code === 7 || // PERMISSION_DENIED
-               code === 16 ) { // UNAUTHENTICATED
-              errorMessage += ' This often indicates an authentication or permissions issue.';
-              errorMessage += ' Please ensure Google Cloud authentication (Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS environment variable with a valid service account key) is configured correctly for your environment.';
-              errorMessage += ' Also verify the service account has the "roles/cloudtts.serviceAgent" or necessary permissions, and the Text-to-Speech API is enabled in your Google Cloud project.';
-           } else if (msg.includes('api has not been used') || msg.includes('enable the api')) {
-              errorMessage += ' The Text-to-Speech API might not be enabled in your Google Cloud project. Please enable it.';
-           } else if (msg.includes('quota')) {
-              errorMessage += ' You may have exceeded your usage quota for the Text-to-Speech API.';
-           } else {
-               // Include the original error message for other types of errors
-               errorMessage += ` Details: ${error.message}`;
-               if (code) {
-                   errorMessage += ` (Code: ${code})`;
-               }
-           }
-        } else {
-            // Handle cases where the caught object is not an Error instance
-            errorMessage += ' An unexpected error occurred.';
-        }
-        console.error("Formatted Error Message:", errorMessage); // Log the detailed error message
-        throw new Error(errorMessage); // Throw the user-friendly, more specific message
-    } finally {
-        // Attempt to close the client if it was initialized
-        if (client && typeof client.close === 'function') {
-            try {
-                console.log("Closing Google Cloud Text-to-Speech client...");
-                await client.close();
-                console.log("Google Cloud Text-to-Speech client closed.");
-            } catch (closeError) {
-                console.error("Error closing Google Cloud Text-to-Speech client:", closeError);
+        // Check if it's an error thrown by the flow itself or a network/API error
+        if (error instanceof Error) {
+            const msg = error.message.toLowerCase();
+            if (msg.includes('unrealspeech api failed') || msg.includes('timed out') || msg.includes('failed to download')) {
+                errorMessage = error.message; // Use the specific error message
+            } else if (msg.includes('unauthorized') || msg.includes('invalid api key')) {
+                 errorMessage += ' Check your UnrealSpeech API key.';
+            } else if (msg.includes('quota') || msg.includes('limit')) {
+                 errorMessage += ' You might have exceeded your UnrealSpeech API quota.';
             }
+             else {
+                 errorMessage += ` Details: ${error.message}`;
+             }
+        } else {
+             errorMessage += ' An unexpected error occurred.';
         }
+        console.error("Formatted Error Message:", errorMessage);
+        throw new Error(errorMessage);
     }
+    // No finally block needed as fetch doesn't require explicit closing like the Google client
 });
