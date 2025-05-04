@@ -17,7 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2 } from 'lucide-react';
+import { Loader2, ArrowRight } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { generateArticleOutline } from '@/ai/flows/generate-article-outline';
 import type { GenerateArticleOutlineOutput } from '@/ai/flows/generate-article-outline';
@@ -34,7 +34,12 @@ const formSchema = z.object({
 
 type OutlineFormValues = z.infer<typeof formSchema>;
 
-const OutlineGenerator: React.FC = () => {
+// Define props including the setActiveTab function
+interface OutlineGeneratorProps {
+    setActiveTab: (tabValue: string) => void;
+}
+
+const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [outlineResult, setOutlineResult] = useState<GenerateArticleOutlineOutput | null>(null);
   const { toast } = useToast();
@@ -67,6 +72,10 @@ const OutlineGenerator: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleProceed = () => {
+      setActiveTab('section'); // Switch to the section tab
   };
 
   return (
@@ -118,13 +127,17 @@ const OutlineGenerator: React.FC = () => {
             </Form>
 
             {outlineResult && (
-                <div className="mt-6 pt-6 border-t">
+                <div className="mt-6 pt-6 border-t space-y-4">
                 <h3 className="text-lg font-semibold mb-2">Generated Outline:</h3>
                 <Textarea
                     readOnly
                     value={outlineResult.outline}
                     className="min-h-[200px] bg-secondary text-secondary-foreground"
                     />
+                 <Button variant="secondary" onClick={handleProceed}>
+                    Proceed to Section Generation
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                 </Button>
                 </div>
             )}
         </CardContent>
