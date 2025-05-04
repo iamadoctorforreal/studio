@@ -113,18 +113,25 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
 
     } catch (error) {
         console.error('Error caught in generateVoiceOverAudioFlow (Google TTS):', error);
-        // Check for common authentication errors
+        // Check for common authentication errors or other Google Cloud specific issues
         let errorMessage = 'Failed to generate voice over audio using Google Cloud TTS.';
         if (error instanceof Error) {
-           if (error.message.includes('Could not load the default credentials') || error.message.includes('permission denied')) {
-              errorMessage += ' Please ensure Google Cloud authentication is configured correctly (e.g., GOOGLE_APPLICATION_CREDENTIALS or ADC) and the Text-to-Speech API is enabled.';
+           // Check for specific Google Cloud error messages related to auth/permissions
+           if (error.message.includes('Could not load the default credentials') ||
+               error.message.includes('permission denied') ||
+               error.message.includes('API has not been used') || // Indicates API not enabled
+               error.message.includes('quota') || // Quota exceeded
+               error.code === 7 ) { // Common code for permission denied
+              errorMessage += ' Please ensure Google Cloud authentication (ADC/GOOGLE_APPLICATION_CREDENTIALS) is configured correctly, the Text-to-Speech API is enabled in your Google Cloud project, and you have sufficient permissions and quota.';
            } else {
+               // Include the original error message for other types of errors
                errorMessage += ` Details: ${error.message}`;
            }
         } else {
+            // Handle cases where the caught object is not an Error instance
             errorMessage += ' An unexpected error occurred.';
         }
-        console.error(errorMessage); // Log the detailed error message
-        throw new Error(errorMessage); // Throw the user-friendly message
+        console.error("Formatted Error Message:", errorMessage); // Log the detailed error message
+        throw new Error(errorMessage); // Throw the user-friendly, more specific message
     }
 });
