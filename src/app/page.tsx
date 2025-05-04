@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState } from 'react';
@@ -18,6 +17,7 @@ export default function Home() {
 
   // Callback function for OutlineGenerator
   const handleOutlineGenerated = (title: string, outline: string, keyPhrase: string) => {
+    console.log("Outline generated, updating state and switching to section tab.");
     setArticleTitle(title);
     setArticleOutline(outline);
     setFocusKeyPhrase(keyPhrase);
@@ -27,7 +27,8 @@ export default function Home() {
 
   // Callback function for SectionGenerator (to proceed to voice-over)
   const handleProceedToVoiceOver = (generatedArticleText: string) => {
-    console.log("Proceeding to Voice Over with article:", generatedArticleText);
+    console.log(`Proceeding to Voice Over. Received article text length: ${generatedArticleText.length}`);
+    // console.log("Full Article Text for Voice Over:", generatedArticleText.substring(0, 200) + "..."); // Log prefix
     setFullArticleText(generatedArticleText); // Set the full article text state
     setActiveTab('voiceover'); // Switch to the voiceover tab
   };
@@ -37,11 +38,11 @@ export default function Home() {
     <div className="w-full max-w-4xl mx-auto">
        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-5 mb-6">
-          <TabsTrigger value="outline">Outline</TabsTrigger>
-          <TabsTrigger value="section">Sections</TabsTrigger>
-          <TabsTrigger value="voiceover">Voice-Over</TabsTrigger>
-          <TabsTrigger value="srt">SRT Chunker</TabsTrigger>
-          <TabsTrigger value="video">Video Clips</TabsTrigger>
+          <TabsTrigger value="outline">1. Outline</TabsTrigger>
+          <TabsTrigger value="section">2. Sections</TabsTrigger>
+          <TabsTrigger value="voiceover">3. Voice-Over</TabsTrigger>
+          <TabsTrigger value="srt">4. SRT Chunker</TabsTrigger>
+          <TabsTrigger value="video">5. Video Clips</TabsTrigger>
         </TabsList>
         <TabsContent value="outline">
             {/* Pass the callback to OutlineGenerator */}
@@ -49,17 +50,22 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="section">
             {/* Pass title, outline, and key phrase to SectionGenerator */}
+            {/* Key ensures re-mount if outline changes, triggering generation */}
             <SectionGenerator
               articleTitle={articleTitle}
               articleOutline={articleOutline}
-              focusKeyPhrase={focusKeyPhrase} // Pass the key phrase
+              focusKeyPhrase={focusKeyPhrase}
               onProceedToVoiceOver={handleProceedToVoiceOver}
-              key={articleOutline} // Re-mount when outline changes
+              key={articleTitle + articleOutline + focusKeyPhrase} // More robust key
             />
         </TabsContent>
          <TabsContent value="voiceover">
             {/* Pass the generated article text to VoiceOverGenerator */}
-            <VoiceOverGenerator initialArticleText={fullArticleText} />
+            {/* Key ensures VoiceOverGenerator updates when fullArticleText changes */}
+            <VoiceOverGenerator
+                 initialArticleText={fullArticleText}
+                 key={fullArticleText} // Force re-render/update when text is ready
+             />
         </TabsContent>
          <TabsContent value="srt">
             <SrtChunker />
