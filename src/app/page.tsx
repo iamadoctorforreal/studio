@@ -13,21 +13,23 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('outline');
   const [articleTitle, setArticleTitle] = useState<string>("");
   const [articleOutline, setArticleOutline] = useState<string>("");
-  const [focusKeyPhrase, setFocusKeyPhrase] = useState<string>(""); // Add state for focus key phrase
+  const [focusKeyPhrase, setFocusKeyPhrase] = useState<string>("");
+  const [fullArticleText, setFullArticleText] = useState<string>(""); // State for the complete article text
 
   // Callback function for OutlineGenerator
   const handleOutlineGenerated = (title: string, outline: string, keyPhrase: string) => {
     setArticleTitle(title);
     setArticleOutline(outline);
-    setFocusKeyPhrase(keyPhrase); // Store the focus key phrase
+    setFocusKeyPhrase(keyPhrase);
+    setFullArticleText(""); // Reset article text when a new outline is generated
     setActiveTab('section'); // Switch tab after outline generation
   };
 
   // Callback function for SectionGenerator (to proceed to voice-over)
-  const handleProceedToVoiceOver = (fullArticleText: string) => {
-    // TODO: Pass fullArticleText to VoiceOverGenerator or manage state differently
-    console.log("Proceeding to Voice Over with article:", fullArticleText);
-    setActiveTab('voiceover');
+  const handleProceedToVoiceOver = (generatedArticleText: string) => {
+    console.log("Proceeding to Voice Over with article:", generatedArticleText);
+    setFullArticleText(generatedArticleText); // Set the full article text state
+    setActiveTab('voiceover'); // Switch to the voiceover tab
   };
 
 
@@ -56,8 +58,8 @@ export default function Home() {
             />
         </TabsContent>
          <TabsContent value="voiceover">
-            {/* TODO: Potentially pass the formatted article text here */}
-            <VoiceOverGenerator />
+            {/* Pass the generated article text to VoiceOverGenerator */}
+            <VoiceOverGenerator initialArticleText={fullArticleText} />
         </TabsContent>
          <TabsContent value="srt">
             <SrtChunker />

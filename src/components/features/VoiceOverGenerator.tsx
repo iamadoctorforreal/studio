@@ -1,6 +1,7 @@
+
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -29,7 +30,11 @@ const formSchema = z.object({
 
 type VoiceOverFormValues = z.infer<typeof formSchema>;
 
-const VoiceOverGenerator: React.FC = () => {
+interface VoiceOverGeneratorProps {
+  initialArticleText?: string; // Make prop optional and rename for clarity
+}
+
+const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleText = "" }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [audioResult, setAudioResult] = useState<GenerateVoiceOverAudioOutput | null>(null);
   const { toast } = useToast();
@@ -37,9 +42,16 @@ const VoiceOverGenerator: React.FC = () => {
   const form = useForm<VoiceOverFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      articleText: "",
+      articleText: initialArticleText, // Initialize with prop value
     },
   });
+
+  // Update form value if the initial text prop changes (e.g., navigating back and forth)
+  useEffect(() => {
+    if (initialArticleText) {
+      form.setValue('articleText', initialArticleText);
+    }
+  }, [initialArticleText, form]);
 
   // NOTE: The actual audio generation logic using huggingface needs implementation.
   // The current AI flow `generateVoiceOverAudio` is a placeholder.
@@ -92,31 +104,31 @@ const VoiceOverGenerator: React.FC = () => {
                     name="articleText"
                     render={({ field }) => (
                     <FormItem>
-                        <FormLabel>Article Text</FormLabel>
+                        <FormLabel>Article Text (Voice-Over Script)</FormLabel>
                         <FormControl>
                         <Textarea
-                            placeholder="Paste the full article text here..."
+                            placeholder="The generated article script will appear here..."
                             {...field}
                             className="min-h-[250px]"
                             />
                         </FormControl>
                         <FormDescription>
-                        The complete text of the article to be converted to audio.
+                         The complete text formatted for voice-over. Review and edit if needed before generating audio.
                         </FormDescription>
                         <FormMessage />
                     </FormItem>
                     )}
                 />
-                <Button type="submit" disabled={isLoading}>
+                <Button type="submit" disabled={isLoading || !form.getValues('articleText')}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Generate Voice-Over
+                    Generate Voice-Over Audio
                 </Button>
                 </form>
             </Form>
 
              {audioResult && (
                 <div className="mt-6 pt-6 border-t">
-                <h3 className="text-lg font-semibold mb-2">Generated Audio:</h3>
+                <h3 className="text-lg font-semibold mb-2">Generated Audio (Placeholder):</h3>
                  {/* Basic Audio Player - Replace with a more robust component if needed */}
                  <div className="flex items-center gap-4 p-4 bg-secondary rounded-md">
                     <PlayCircle className="h-8 w-8 text-primary" />
