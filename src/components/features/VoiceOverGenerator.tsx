@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -18,13 +19,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, PlayCircle, Download, Mic } from 'lucide-react'; // Added Mic
 import { useToast } from "@/hooks/use-toast";
+// Make sure the import path is correct and matches the updated flow file name/location
 import { generateVoiceOverAudio } from '@/ai/flows/generate-voice-over-audio';
-import type { GenerateVoiceOverAudioOutput } from '@/ai/flows/generate-voice-over-audio';
+import type { GenerateVoiceOverAudioOutput, GenerateVoiceOverAudioInput } from '@/ai/flows/generate-voice-over-audio'; // Import input type too
 
+// Update Zod schema to reflect the flow's input constraints (e.g., max length)
 const formSchema = z.object({
-  articleText: z.string().min(20, { // Reduced min length slightly
-    message: "Article text must be at least 20 characters.",
-  }),
+  articleText: z.string()
+    .min(1, { // Minimum length can be 1
+        message: "Article text cannot be empty.",
+     })
+    .max(500000, { // Max length from UnrealSpeech docs
+        message: "Article text exceeds the maximum allowed length (500,000 characters)."
+    }),
+  // Add optional fields from the flow input if you want to control them via UI
+  // voiceId: z.string().optional(),
+  // bitrate: z.string().optional(),
 });
 
 type VoiceOverFormValues = z.infer<typeof formSchema>;
@@ -43,18 +53,20 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     resolver: zodResolver(formSchema),
     defaultValues: {
       articleText: initialArticleText || "", // Ensure default is string
+      // Initialize optional fields if added to the form
+      // voiceId: 'Liv',
+      // bitrate: '192k',
     },
   });
 
-  // Update form value if the initial text prop changes
-  useEffect(() => {
-    // Only update if the prop has a value and it's different from current form value
-    if (initialArticleText && initialArticleText !== form.getValues('articleText')) {
-        console.log("Updating voice over text from prop.");
-        form.setValue('articleText', initialArticleText, { shouldValidate: true }); // Validate on update
-        setAudioResult(null); // Reset audio result when text changes
-    }
-   }, [initialArticleText, form]); // form added as dependency
+   // UseEffect to reset form and audio when component mounts or initial text changes drastically
+    useEffect(() => {
+      console.log("VoiceOverGenerator mounted or initialArticleText changed:", initialArticleText.substring(0, 50) + "...");
+      form.reset({ articleText: initialArticleText || "" }); // Reset form with new initial text
+      setAudioResult(null); // Reset audio result when text changes
+      // Trigger validation after reset if needed
+      form.trigger('articleText');
+    }, [initialArticleText, form]); // form added as dependency
 
 
   const onSubmit = async (values: VoiceOverFormValues) => {
@@ -62,26 +74,38 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     setAudioResult(null);
     toast({
         title: "Generating Voice-Over",
-        description: "Calling the TTS model. This may take a moment...",
+        description: "Creating UnrealSpeech synthesis task. This might take some time depending on text length...",
+        duration: 10000, // Longer duration for async task
       });
 
     try {
-      // Ensure the input matches the flow's expected structure
-      const result = await generateVoiceOverAudio({ articleText: values.articleText });
+      // Construct the input for the flow, including optional fields if they exist in the form
+      const flowInput: GenerateVoiceOverAudioInput = {
+        articleText: values.articleText,
+         // Pass optional values if they are part of the form state
+         // voiceId: values.voiceId || undefined, // Pass if form has voiceId field
+         // bitrate: values.bitrate || undefined, // Pass if form has bitrate field
+      };
+
+      console.log("Calling generateVoiceOverAudio flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' }); // Log sanitized input
+
+      const result = await generateVoiceOverAudio(flowInput);
       setAudioResult(result); // Store the result containing the data URI
 
       toast({
         title: "Voice-Over Generated",
         description: "Successfully generated the voice-over audio.",
       });
-    } catch (error) {
+    } catch (error: any) { // Catch 'any' type for flexibility
       console.error("Error generating voice-over:", error);
-       const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
+       // Use the error message directly if it's an Error object, otherwise provide a generic message
+       const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred during voice-over generation.";
       toast({
         variant: "destructive",
-        title: "Generation Failed",
-        description: `Could not generate the voice-over audio: ${errorMessage}`,
-        duration: 9000, // Show error longer
+        title: "Voice-Over Generation Failed",
+        // Display the specific error message from the flow
+        description: errorMessage,
+        duration: 15000, // Show error longer
       });
     } finally {
       setIsLoading(false);
@@ -92,9 +116,15 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
    const getAudioMimeType = (dataUri: string | undefined): string => {
         if (!dataUri) return 'audio/mpeg'; // Default fallback
         try {
-            return dataUri.substring(dataUri.indexOf(':') + 1, dataUri.indexOf(';'));
+            // Robust parsing: handle potential errors if format is unexpected
+            const match = dataUri.match(/^data:(audio\/[^;]+);base64,/);
+            if (match && match[1]) {
+                return match[1];
+            }
+            console.warn("Could not parse MIME type from data URI, using default 'audio/mpeg'. URI start:", dataUri.substring(0, 30));
+            return 'audio/mpeg';
         } catch (e) {
-             console.warn("Could not parse MIME type from data URI, using default.", e);
+             console.warn("Error parsing MIME type from data URI, using default 'audio/mpeg'.", e);
             return 'audio/mpeg';
         }
     };
@@ -103,8 +133,8 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
   return (
      <Card>
         <CardHeader>
-            <CardTitle>Voice-Over Generator</CardTitle>
-            <CardDescription>Generate voice-over audio from the formatted article text using a Text-to-Speech model.</CardDescription>
+            <CardTitle>Voice-Over Generator (UnrealSpeech)</CardTitle>
+            <CardDescription>Generate voice-over audio from the article text using the UnrealSpeech API. Generation may take time for long texts.</CardDescription>
         </CardHeader>
         <CardContent>
              {!form.getValues('articleText') && !initialArticleText && (
@@ -122,23 +152,27 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                         <FormLabel>Article Text (Voice-Over Script)</FormLabel>
                         <FormControl>
                         <Textarea
-                            placeholder="The formatted voice-over script will appear here once the article sections are generated and formatted..."
+                            placeholder="The formatted voice-over script will appear here once the article sections are generated..."
                             {...field}
-                            className="min-h-[250px] bg-secondary/50" // Slightly different bg
-                             readOnly={!initialArticleText} // Make read-only if no initial text provided
+                             // Make read-only only if there's truly no initial text and it hasn't been populated yet
+                            readOnly={!initialArticleText && !field.value}
+                            className={`min-h-[250px] ${!initialArticleText && !field.value ? 'bg-muted' : 'bg-secondary/50'}`}
                             />
                         </FormControl>
                         <FormDescription>
-                          Review and edit the script if needed before generating the audio.
+                          Review the script. Max {formSchema.shape.articleText._def.checks.find(c => c.kind === 'max')?.value.toLocaleString()} characters. Current: {field.value?.length.toLocaleString() ?? 0}
                         </FormDescription>
                         <FormMessage />
                     </FormItem>
                     )}
                 />
+                 {/* Optional: Add fields for VoiceId, Bitrate here if needed */}
+
                 <Button
                      type="submit"
-                     disabled={isLoading || !form.formState.isValid || !form.getValues('articleText')} // Disable if loading, invalid, or empty
-                     aria-label="Generate Voice Over Audio"
+                      // Disable if loading OR form is invalid OR text is empty
+                      disabled={isLoading || !form.formState.isValid || !form.getValues('articleText')}
+                     aria-label={isLoading ? "Generating audio, please wait" : "Generate Voice Over Audio"}
                  >
                     {isLoading ? (
                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -171,26 +205,35 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                          >
                             <a
                                 href={audioResult.audioDataUri}
-                                download={`news_automator_voice_over_${Date.now()}.mp3`} // Suggest a filename with timestamp
+                                // Suggest a filename including voice and timestamp
+                                download={`news_automator_voice_${form.getValues('articleText')?.substring(0,10).replace(/\s+/g, '_') || 'audio'}_${Date.now()}.mp3`}
                             >
                                 <Download className="h-4 w-4" />
-                                {/* Screen reader only text */}
                                 {/* <span className="sr-only">Download Audio</span> */}
                             </a>
                         </Button>
                     </div>
-                     <p className="text-xs text-muted-foreground text-center">Audio generated successfully. You can play it above or download the file.</p>
+                     <p className="text-xs text-muted-foreground text-center">Audio generated successfully. Play above or download the MP3 file.</p>
                 </div>
             )}
-             {/* Optional: Show message if generation is done but failed silently (no URI) */}
-            { !isLoading && audioResult && !audioResult.audioDataUri && (
+             {/* Show message if generation finished without error BUT no URI was returned (should be rare with new logic) */}
+            { !isLoading && audioResult === null && form.formState.isSubmitSuccessful && (
                 <div className="mt-6 pt-6 border-t text-center">
-                    <p className="text-destructive">Audio generation finished, but no audio data was received. Please check the logs or try again.</p>
+                    <p className="text-destructive">Audio generation process completed, but no audio data was received. This might indicate an issue during the final download or processing step. Please check the console logs or try again.</p>
                  </div>
             )}
+             {/* Show message while loading */}
+             {isLoading && (
+                 <div className="mt-6 pt-6 border-t text-center flex items-center justify-center gap-2 text-muted-foreground">
+                     <Loader2 className="h-5 w-5 animate-spin" />
+                     <span>Processing audio request... This may take a while for long texts.</span>
+                 </div>
+             )}
         </CardContent>
     </Card>
   );
 };
 
 export default VoiceOverGenerator;
+
+    
