@@ -62,8 +62,10 @@ export async function generateVoiceOverAudio(
       console.error('UnrealSpeech API key is missing or not configured.');
       throw new Error('UnrealSpeech API key is not configured. Please set the UNREALSPEECH_API_KEY environment variable or ensure the fallback key is correct.');
   }
-  // Log the key being used (mask parts of it for security if logging publicly)
-  // console.log(`Using UnrealSpeech API Key starting with: ${UNREALSPEECH_API_KEY.substring(0, 4)}...`);
+  // Log the source of the key (env or fallback) and partially mask it for security
+  const keySource = process.env.UNREALSPEECH_API_KEY ? 'environment variable' : 'fallback';
+  console.log(`Using UnrealSpeech API Key from ${keySource}, starting with: ${UNREALSPEECH_API_KEY.substring(0, 4)}...`);
+
   return generateVoiceOverAudioFlow(validatedInput);
 }
 
@@ -128,7 +130,8 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
 
             // Provide more specific error message for 403
             if (errorStatus === 403) {
-                 throw new Error(`UnrealSpeech API request failed with status 403 Forbidden. This usually means the API key is invalid, expired, or lacks permissions. Please verify your key (${UNREALSPEECH_API_KEY.substring(0,4)}...) and account status.`);
+                 const keySource = process.env.UNREALSPEECH_API_KEY ? 'environment variable' : 'fallback key';
+                 throw new Error(`UnrealSpeech API request failed with status 403 Forbidden. This usually means the API key (from ${keySource}) is invalid, expired, or lacks permissions. Please verify your key (${UNREALSPEECH_API_KEY.substring(0,4)}...) and account status.`);
             } else {
                  throw new Error(`UnrealSpeech API failed to create task (${errorStatus} ${errorStatusText}): ${errorBody}`);
             }
@@ -181,8 +184,9 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
                  }
                  // Handle 403 on polling too
                  if (errorStatus === 403) {
+                     const keySource = process.env.UNREALSPEECH_API_KEY ? 'environment variable' : 'fallback key';
                      console.error(`UnrealSpeech API Polling Error (403 Forbidden): ${errorBody}`);
-                     throw new Error(`UnrealSpeech API polling failed with status 403 Forbidden. Check API key permissions.`);
+                     throw new Error(`UnrealSpeech API polling failed with status 403 Forbidden. Check API key (from ${keySource}) permissions.`);
                  }
                  console.warn(`UnrealSpeech API Polling Warning (${errorStatus} ${errorStatusText}): ${errorBody}. Retrying...`);
                  // Continue polling on transient errors, but maybe add more specific error handling
@@ -256,7 +260,7 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
 
         // Use the specific error message if it's one of our custom ones
         if (error instanceof Error) {
-             if (error.message.startsWith('UnrealSpeech API') || error.message.startsWith('Failed to download')) {
+             if (error.message.startsWith('UnrealSpeech API') || error.message.startsWith('Failed to download') || error.message.startsWith('UnrealSpeech Synthesis Task') || error.message.startsWith('UnrealSpeech task')) {
                 errorMessage = error.message; // Use the specific error message thrown above
             } else {
                  // Handle other generic errors
