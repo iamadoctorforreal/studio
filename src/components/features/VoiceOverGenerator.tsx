@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, PlayCircle } from 'lucide-react';
+import { Loader2, PlayCircle, Download } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { generateVoiceOverAudio } from '@/ai/flows/generate-voice-over-audio';
 import type { GenerateVoiceOverAudioOutput } from '@/ai/flows/generate-voice-over-audio';
@@ -31,59 +31,54 @@ const formSchema = z.object({
 type VoiceOverFormValues = z.infer<typeof formSchema>;
 
 interface VoiceOverGeneratorProps {
-  initialArticleText?: string; // Make prop optional and rename for clarity
+  initialArticleText?: string;
 }
 
 const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleText = "" }) => {
   const [isLoading, setIsLoading] = useState(false);
+  // State now holds the full output object which includes the data URI
   const [audioResult, setAudioResult] = useState<GenerateVoiceOverAudioOutput | null>(null);
   const { toast } = useToast();
 
   const form = useForm<VoiceOverFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      articleText: initialArticleText, // Initialize with prop value
+      articleText: initialArticleText,
     },
   });
 
-  // Update form value if the initial text prop changes (e.g., navigating back and forth)
+  // Update form value if the initial text prop changes
   useEffect(() => {
     if (initialArticleText) {
       form.setValue('articleText', initialArticleText);
+      setAudioResult(null); // Reset audio result when text changes
     }
   }, [initialArticleText, form]);
 
-  // NOTE: The actual audio generation logic using huggingface needs implementation.
-  // The current AI flow `generateVoiceOverAudio` is a placeholder.
+
   const onSubmit = async (values: VoiceOverFormValues) => {
     setIsLoading(true);
     setAudioResult(null);
     toast({
         title: "Generating Voice-Over",
-        description: "This may take a moment. Feature currently under development.",
+        description: "Calling the TTS model. This may take a few moments...",
       });
-    // Simulating API call delay for placeholder
-    await new Promise(resolve => setTimeout(resolve, 1500));
 
     try {
-      // TODO: Replace this with actual call to huggingface/Edge-TTS model logic
-      // The current genkit flow likely won't work without the TTS implementation.
-      // const result = await generateVoiceOverAudio(values);
-      // setAudioResult(result);
-
-      // Placeholder result:
-      setAudioResult({ audioUrl: 'placeholder_audio_url.mp3' }); // Replace with actual URL when implemented
+      const result = await generateVoiceOverAudio(values);
+      setAudioResult(result); // Store the result containing the data URI
 
       toast({
-        title: "Voice-Over Generated (Placeholder)",
-        description: "Successfully generated the voice-over audio (placeholder).",
+        title: "Voice-Over Generated",
+        description: "Successfully generated the voice-over audio.",
       });
     } catch (error) {
       console.error("Error generating voice-over:", error);
+       const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
       toast({
         variant: "destructive",
         title: "Generation Failed",
-        description: "Could not generate the voice-over audio. Please try again.",
+        description: `Could not generate the voice-over audio: ${errorMessage}`,
       });
     } finally {
       setIsLoading(false);
@@ -94,7 +89,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
      <Card>
         <CardHeader>
             <CardTitle>Voice-Over Generator</CardTitle>
-            <CardDescription>Generate voice-over audio from the formatted article text. (Feature Under Development)</CardDescription>
+            <CardDescription>Generate voice-over audio from the formatted article text using Edge-TTS.</CardDescription>
         </CardHeader>
         <CardContent>
             <Form {...form}>
@@ -126,18 +121,31 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                 </form>
             </Form>
 
-             {audioResult && (
-                <div className="mt-6 pt-6 border-t">
-                <h3 className="text-lg font-semibold mb-2">Generated Audio (Placeholder):</h3>
-                 {/* Basic Audio Player - Replace with a more robust component if needed */}
-                 <div className="flex items-center gap-4 p-4 bg-secondary rounded-md">
-                    <PlayCircle className="h-8 w-8 text-primary" />
-                    {/* In a real scenario, you'd use an <audio> tag */}
-                    {/* <audio controls src={audioResult.audioUrl}>
-                        Your browser does not support the audio element.
-                    </audio> */}
-                    <span className="text-sm text-muted-foreground">Audio playback controls would appear here. URL: {audioResult.audioUrl}</span>
-                 </div>
+             {audioResult && audioResult.audioDataUri && (
+                <div className="mt-6 pt-6 border-t space-y-4">
+                    <h3 className="text-lg font-semibold mb-2">Generated Audio:</h3>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 bg-secondary rounded-md">
+                        <PlayCircle className="h-8 w-8 text-primary flex-shrink-0" />
+                        <audio controls className="w-full" key={audioResult.audioDataUri}>
+                            <source src={audioResult.audioDataUri} type={audioResult.audioDataUri.split(':')[1].split(';')[0] || 'audio/mpeg'} />
+                            Your browser does not support the audio element.
+                        </audio>
+                         {/* Download Button */}
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            asChild // Use asChild to make the button behave like a link
+                             className="flex-shrink-0"
+                         >
+                            <a
+                                href={audioResult.audioDataUri}
+                                download="voice_over.mp3" // Suggest a filename
+                            >
+                                <Download className="h-4 w-4" />
+                                <span className="sr-only">Download Audio</span>
+                            </a>
+                        </Button>
+                    </div>
                 </div>
             )}
         </CardContent>
@@ -146,3 +154,4 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
 };
 
 export default VoiceOverGenerator;
+
