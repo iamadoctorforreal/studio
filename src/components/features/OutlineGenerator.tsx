@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState } from 'react';
@@ -34,12 +35,12 @@ const formSchema = z.object({
 
 type OutlineFormValues = z.infer<typeof formSchema>;
 
-// Define props including the setActiveTab function
+// Define props including the callback function
 interface OutlineGeneratorProps {
-    setActiveTab: (tabValue: string) => void;
+    onOutlineGenerated: (title: string, outline: string, focusKeyPhrase: string) => void;
 }
 
-const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => {
+const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ onOutlineGenerated }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [outlineResult, setOutlineResult] = useState<GenerateArticleOutlineOutput | null>(null);
   const { toast } = useToast();
@@ -60,8 +61,10 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => 
       setOutlineResult(result);
       toast({
         title: "Outline Generated",
-        description: "Successfully generated the article outline.",
+        description: "Successfully generated the article outline as a list.",
       });
+      // Call the callback with the generated data
+      onOutlineGenerated(values.title, result.outline, values.focusKeyPhrase);
     } catch (error) {
       console.error("Error generating outline:", error);
       toast({
@@ -74,15 +77,18 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => 
     }
   };
 
-  const handleProceed = () => {
-      setActiveTab('section'); // Switch to the section tab
-  };
+  // Button is now handled by the callback setting the active tab in the parent
+  // const handleProceed = () => {
+  //     if (outlineResult) {
+  //        onOutlineGenerated(form.getValues('title'), outlineResult.outline, form.getValues('focusKeyPhrase'));
+  //     }
+  // };
 
   return (
     <Card>
         <CardHeader>
             <CardTitle>Article Outline Generator</CardTitle>
-            <CardDescription>Generate a news article outline based on a title and focus key phrase.</CardDescription>
+            <CardDescription>Generate a news article outline as a numbered or bulleted list based on a title and focus key phrase.</CardDescription>
         </CardHeader>
         <CardContent>
             <Form {...form}>
@@ -121,7 +127,7 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => 
                 />
                 <Button type="submit" disabled={isLoading}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Generate Outline
+                    Generate Outline & Proceed
                 </Button>
                 </form>
             </Form>
@@ -134,10 +140,13 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ setActiveTab }) => 
                     value={outlineResult.outline}
                     className="min-h-[200px] bg-secondary text-secondary-foreground"
                     />
-                 <Button variant="secondary" onClick={handleProceed}>
+                 {/* Removed proceed button, action now happens on submit success */}
+                 {/*
+                 <Button variant="secondary" onClick={handleProceed} disabled={!outlineResult}>
                     Proceed to Section Generation
                     <ArrowRight className="ml-2 h-4 w-4" />
                  </Button>
+                 */}
                 </div>
             )}
         </CardContent>

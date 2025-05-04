@@ -1,3 +1,4 @@
+
 // Use server directive to ensure code is run on the server
 'use server';
 
@@ -26,7 +27,7 @@ export type GenerateArticleOutlineInput = z.infer<typeof GenerateArticleOutlineI
  * Output schema for the generated article outline.
  */
 const GenerateArticleOutlineOutputSchema = z.object({
-  outline: z.string().describe('The generated news article outline.'),
+  outline: z.string().describe('The generated news article outline as a Markdown list (numbered or bulleted).'), // Updated description
 });
 
 export type GenerateArticleOutlineOutput = z.infer<typeof GenerateArticleOutlineOutputSchema>;
@@ -50,17 +51,20 @@ const prompt = ai.definePrompt({
   },
   output: {
     schema: z.object({
-      outline: z.string().describe('The generated news article outline.'),
+       outline: z.string().describe('The generated news article outline as a Markdown list (numbered or bulleted).'), // Updated description
     }),
   },
+  // Updated prompt to explicitly ask for a list format
   prompt: `You are an AI assistant specialized in creating news article outlines.
   Based on the provided title and focus key phrase, generate a detailed and well-structured outline for a news article.
+  The outline MUST be formatted as a numbered or bulleted list (Markdown).
 
   Title: {{{title}}}
   Focus Key Phrase: {{{focusKeyPhrase}}}
 
-  Outline:`, // Just outputting the outline
+  Outline (as a list):`,
 });
+
 
 const generateArticleOutlineFlow = ai.defineFlow<
   typeof GenerateArticleOutlineInputSchema,
@@ -73,6 +77,11 @@ const generateArticleOutlineFlow = ai.defineFlow<
   },
   async input => {
     const {output} = await prompt(input);
-    return output!;
+    // Ensure the output is not null or undefined before returning
+    if (!output || !output.outline) {
+        throw new Error('Failed to generate article outline.');
+    }
+    return output;
   }
 );
+
