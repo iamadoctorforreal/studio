@@ -68,11 +68,14 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
         throw new Error('Article text cannot be empty.');
     }
 
-    console.log(`Attempting to generate voice over using Google TTS for text starting with: "${input.articleText.substring(0, 50)}..."`);
+    console.log(`Starting generateVoiceOverAudioFlow for text starting with: "${input.articleText.substring(0, 50)}..."`);
+    console.log("Attempting to initialize Google Cloud Text-to-Speech client...");
 
+    let client: TextToSpeechClient | null = null;
     try {
         // Creates a client
-        const client = new TextToSpeechClient();
+        client = new TextToSpeechClient();
+        console.log("Google Cloud Text-to-Speech client initialized successfully.");
 
         // Construct the request
         const request = {
@@ -85,7 +88,7 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
         };
 
         // Performs the text-to-speech request
-        console.log("Calling Google Cloud Text-to-Speech API...");
+        console.log("Calling Google Cloud Text-to-Speech API (synthesizeSpeech)...");
         const [response] = await client.synthesizeSpeech(request);
         console.log("Google Cloud TTS API response received.");
 
@@ -111,21 +114,34 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
 
         return { audioDataUri };
 
-    } catch (error) {
+    } catch (error: any) { // Catch 'any' to access error.code potentially
         console.error('Error caught in generateVoiceOverAudioFlow (Google TTS):', error);
         // Check for common authentication errors or other Google Cloud specific issues
         let errorMessage = 'Failed to generate voice over audio using Google Cloud TTS.';
         if (error instanceof Error) {
-           // Check for specific Google Cloud error messages related to auth/permissions
-           if (error.message.includes('Could not load the default credentials') ||
-               error.message.includes('permission denied') ||
-               error.message.includes('API has not been used') || // Indicates API not enabled
-               error.message.includes('quota') || // Quota exceeded
-               error.code === 7 ) { // Common code for permission denied
-              errorMessage += ' Please ensure Google Cloud authentication (ADC/GOOGLE_APPLICATION_CREDENTIALS) is configured correctly, the Text-to-Speech API is enabled in your Google Cloud project, and you have sufficient permissions and quota.';
+           // Check for specific Google Cloud error messages/codes related to auth/permissions
+           const msg = error.message.toLowerCase();
+           const code = error.code; // GaxiosError might have a code property
+
+           if (msg.includes('could not load the default credentials') ||
+               msg.includes('permission denied') ||
+               msg.includes('could not refresh access token') || // Explicit check for the reported error
+               msg.includes('request failed with status code 500') || // Often related to auth backend issues
+               code === 7 || // PERMISSION_DENIED
+               code === 16 ) { // UNAUTHENTICATED
+              errorMessage += ' This often indicates an authentication or permissions issue.';
+              errorMessage += ' Please ensure Google Cloud authentication (Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS environment variable with a valid service account key) is configured correctly for your environment.';
+              errorMessage += ' Also verify the service account has the "roles/cloudtts.serviceAgent" or necessary permissions, and the Text-to-Speech API is enabled in your Google Cloud project.';
+           } else if (msg.includes('api has not been used') || msg.includes('enable the api')) {
+              errorMessage += ' The Text-to-Speech API might not be enabled in your Google Cloud project. Please enable it.';
+           } else if (msg.includes('quota')) {
+              errorMessage += ' You may have exceeded your usage quota for the Text-to-Speech API.';
            } else {
                // Include the original error message for other types of errors
                errorMessage += ` Details: ${error.message}`;
+               if (code) {
+                   errorMessage += ` (Code: ${code})`;
+               }
            }
         } else {
             // Handle cases where the caught object is not an Error instance
@@ -133,5 +149,16 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
         }
         console.error("Formatted Error Message:", errorMessage); // Log the detailed error message
         throw new Error(errorMessage); // Throw the user-friendly, more specific message
+    } finally {
+        // Attempt to close the client if it was initialized
+        if (client && typeof client.close === 'function') {
+            try {
+                console.log("Closing Google Cloud Text-to-Speech client...");
+                await client.close();
+                console.log("Google Cloud Text-to-Speech client closed.");
+            } catch (closeError) {
+                console.error("Error closing Google Cloud Text-to-Speech client:", closeError);
+            }
+        }
     }
 });
