@@ -1,42 +1,44 @@
 'use server';
 
 /**
- * @fileOverview A voice-over audio generation AI agent using the @andresaya/edge-tts Node.js package.
+ * @fileOverview A voice-over audio generation AI agent using Google Cloud Text-to-Speech API.
  *
  * - generateVoiceOverAudio - A function that generates voice-over audio from the formatted article.
  * - GenerateVoiceOverAudioInput - The input type for the generateVoiceOverAudio function.
  * - GenerateVoiceOverAudioOutput - The return type for the generateVoiceOverAudio function.
- *
- * NOTE: This flow relies on having Node.js installed and the `@andresaya/edge-tts` package installed globally *in the environment where the Next.js server is running*.
- * You can install it via npm: `npm install -g @andresaya/edge-tts`
- * It executes the `edge-tts` command-line tool provided by this package.
  */
 
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
-import { exec } from 'child_process'; // For executing the command-line tool
-import { promises as fs } from 'fs'; // For file system operations (reading/deleting temp file)
-import path from 'path'; // For handling file paths
-import os from 'os'; // For finding temporary directory
-import { promisify } from 'util'; // To promisify exec
-
-const execAsync = promisify(exec);
+import textToSpeech, { protos } from '@google-cloud/text-to-speech';
+import { promises as fs } from 'fs'; // For file system operations (optional, could stream directly)
+import path from 'path'; // For handling file paths if saving temporarily
+import os from 'os'; // For finding temporary directory if saving temporarily
 
 // --- Constants ---
-// Default voice - see `edge-tts --list-voices` for options
-const DEFAULT_VOICE = 'en-US-SierraNeural';
-// You might want to expose more options via the input schema later
+// Default voice configuration for Google Cloud TTS
+const DEFAULT_LANGUAGE_CODE = 'en-US';
+// Using a standard voice, WaveNet voices might incur higher costs.
+const DEFAULT_VOICE_NAME = 'en-US-Standard-C'; // Example standard voice
+const DEFAULT_AUDIO_ENCODING: protos.google.cloud.texttospeech.v1.AudioEncoding = 'MP3';
+
+// Instantiate the Google Cloud Text-to-Speech client
+// Authentication is handled automatically via Application Default Credentials (ADC)
+// Make sure ADC is configured in your environment (e.g., `gcloud auth application-default login`)
+const ttsClient = new textToSpeech.TextToSpeechClient();
 
 const GenerateVoiceOverAudioInputSchema = z.object({
   articleText: z
     .string()
     .min(1, "Article text cannot be empty.")
-    // Edge TTS might have its own limits, but they are less defined than API limits.
-    // Keeping a reasonable limit for practical purposes.
-    .max(100000, "Article text is very long, generation might take time or fail.")
+    // Google Cloud TTS has limits, but they are typically high (e.g., 5000 bytes per request for standard API)
+    // Adjust based on potential usage and expected article length.
+    .max(100000, "Article text is very long, consider breaking it down for synthesis.")
     .describe('The formatted article text to generate voice-over audio from.'),
-  voiceId: z.string().optional().default(DEFAULT_VOICE).describe('Edge TTS Voice ID (e.g., en-US-AvaNeural, en-GB-SoniaNeural). See `edge-tts --list-voices`.'),
-  // Add other potential edge-tts options here if needed (rate, pitch, volume)
+  languageCode: z.string().optional().default(DEFAULT_LANGUAGE_CODE).describe('BCP-47 language code (e.g., en-US, en-GB).'),
+  voiceName: z.string().optional().default(DEFAULT_VOICE_NAME).describe('Specific voice name (e.g., en-US-Wavenet-D). See Google Cloud TTS documentation for options.'),
+  // Removed voiceId as it's not directly applicable to Google TTS in the same way
+  // Removed bitrate as it's part of audioConfig
 });
 export type GenerateVoiceOverAudioInput = z.infer<typeof GenerateVoiceOverAudioInputSchema>;
 
@@ -52,7 +54,6 @@ export type GenerateVoiceOverAudioOutput = z.infer<typeof GenerateVoiceOverAudio
  * @returns The data URI string.
  */
 function bufferToDataURI(buffer: Buffer | ArrayBuffer, mimeType: string): string {
-    // Ensure Buffer is available (should be in Node.js environment)
     if (typeof Buffer === 'undefined') {
         throw new Error("Buffer API is not available in this environment.");
     }
@@ -60,62 +61,7 @@ function bufferToDataURI(buffer: Buffer | ArrayBuffer, mimeType: string): string
     return `data:${mimeType};base64,${base64String}`;
 }
 
-/**
- * Helper function to safely escape text for shell commands.
- * Wraps the text in single quotes and escapes any internal single quotes.
- * Adjust based on your shell environment if necessary (e.g., Windows might need different escaping).
- * @param text The text to escape.
- * @returns Escaped text suitable for embedding in a shell command.
- */
-function escapeShellArg(text: string): string {
-    // Simple escaping for POSIX-like shells (Linux, macOS)
-    // Replaces single quotes with '\'', then wraps the whole string in single quotes.
-    return `'${text.replace(/'/g, "'\\''")}'`;
-    // For Windows (cmd.exe), escaping is more complex. You might need a different strategy
-    // or use libraries designed for cross-platform shell escaping if Windows support is critical.
-}
-
-// Flag to track if the initial check has been performed
-let edgeTtsCheckPerformed = false;
-let edgeTtsAvailable = false;
-
-/**
- * Checks if the `edge-tts --version` command runs successfully in the server environment.
- * Caches the result to avoid repeated checks.
- */
-async function checkEdgeTtsAvailability(): Promise<boolean> {
-    if (edgeTtsCheckPerformed) {
-        return edgeTtsAvailable;
-    }
-
-    console.log("Performing initial check for Edge TTS availability (using @andresaya/edge-tts on server)...");
-    try {
-        // Use a short timeout for the version check
-        const { stdout, stderr } = await execAsync('edge-tts --version', { timeout: 5000 });
-        console.log("Edge TTS version check stdout:", stdout);
-        if (stderr) {
-            console.warn("Edge TTS version check stderr:", stderr);
-            // Some versions might print info to stderr, allow if it doesn't look like an error
-            if (stderr.toLowerCase().includes('error') || stderr.toLowerCase().includes('traceback') || stderr.toLowerCase().includes('command not found') || stderr.toLowerCase().includes('enoent')) {
-                 throw new Error(`Edge TTS version check failed: ${stderr}`);
-            }
-        }
-        console.log("@andresaya/edge-tts seems available on the server.");
-        edgeTtsAvailable = true;
-    } catch (error: any) {
-        console.error("Edge TTS availability check failed on the server:", error);
-        edgeTtsAvailable = false;
-         // Provide specific guidance based on common errors
-         if (error.message.includes('command not found') || error.code === 'ENOENT') {
-             console.error("Error Suggestion: 'edge-tts' command not found in the server's PATH. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) in the server environment and Node's global bin directory is in the system's PATH.");
-         } else {
-              console.error("Error Suggestion: Unexpected error during Edge TTS check on the server. Verify Node.js and npm installation and PATH configuration in the server environment.");
-         }
-    }
-    edgeTtsCheckPerformed = true;
-    return edgeTtsAvailable;
-}
-
+// Removed shell escaping and availability check functions as they are no longer needed.
 
 export async function generateVoiceOverAudio(
   input: GenerateVoiceOverAudioInput
@@ -123,14 +69,7 @@ export async function generateVoiceOverAudio(
   // Validate input using Zod before calling the flow
   const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
 
-  // Perform the availability check in the server environment
-  const isAvailable = await checkEdgeTtsAvailability();
-  if (!isAvailable) {
-    // Throw a user-friendly error if the check failed
-    throw new Error("Local Edge TTS setup issue (Server Environment): Could not run the 'edge-tts' command. Please ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) *on the server* and the Node.js global bin directory is included in the server's system PATH. Check server logs for more specific errors (like 'command not found').");
-  }
-
-  // If check passed, proceed with the generation flow
+  // No availability check needed as we use the official library
   return generateVoiceOverAudioFlow(validatedInput);
 }
 
@@ -143,129 +82,77 @@ const generateVoiceOverAudioFlow = ai.defineFlow<
   inputSchema: GenerateVoiceOverAudioInputSchema,
   outputSchema: GenerateVoiceOverAudioOutputSchema,
 },
-async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput> => {
+async (input): Promise<GenerateVoiceOverAudioOutput> => {
     if (!input.articleText || input.articleText.trim().length === 0) {
         throw new Error('Article text cannot be empty.');
     }
 
-    console.log(`Starting Edge TTS Flow for text (${input.articleText.length} chars) starting with: "${input.articleText.substring(0, 50)}..." using voice: ${input.voiceId}`);
+    console.log(`Starting Google Cloud TTS Flow for text (${input.articleText.length} chars) using voice: ${input.voiceName}, lang: ${input.languageCode}`);
 
-    const tempFileName = `edge-tts-output-${Date.now()}.mp3`;
-    // Ensure temp directory exists (important in some environments like serverless functions)
-    const tempDir = os.tmpdir();
-    try {
-        await fs.mkdir(tempDir, { recursive: true });
-    } catch (mkdirError) {
-        console.warn(`Could not ensure temp directory ${tempDir} exists:`, mkdirError);
-        // Proceed anyway, hoping it exists
-    }
-    const tempFilePath = path.join(tempDir, tempFileName);
-
-
-    console.log(`Generating temporary audio file at: ${tempFilePath}`);
-
-    // Construct the command using the globally installed 'edge-tts'
-    // Ensure text is properly escaped for the shell
-    const escapedText = escapeShellArg(input.articleText);
-    const escapedFilePath = escapeShellArg(tempFilePath); // Escape file path too
-    // Command format for @andresaya/edge-tts: edge-tts -v <voice> -f <file> --text <text>
-    const command = `edge-tts -v ${input.voiceId} -f ${escapedFilePath} --text ${escapedText}`;
-
-    console.log(`Executing command: edge-tts -v ${input.voiceId} -f '${tempFilePath}' --text '...'`); // Log sanitized command
-
+    // Construct the synthesis request for Google Cloud TTS
+    const request: protos.google.cloud.texttospeech.v1.ISynthesizeSpeechRequest = {
+        input: { text: input.articleText },
+        voice: {
+            languageCode: input.languageCode,
+            name: input.voiceName,
+            // ssmlGender can be added if needed, e.g., 'NEUTRAL', 'FEMALE', 'MALE'
+        },
+        audioConfig: {
+            audioEncoding: DEFAULT_AUDIO_ENCODING,
+             // You can add speakingRate, pitch, volumeLevel, effectsProfileId etc. here
+             // speakingRate: 1.0, // Default
+             // pitch: 0, // Default
+        },
+    };
 
     try {
-        // --- Step 1: Execute edge-tts command ---
-        const { stdout, stderr } = await execAsync(command, { timeout: 180000 }); // 3 minute timeout, adjust as needed
+        console.log('Sending request to Google Cloud Text-to-Speech API...');
+        // --- Step 1: Call Google Cloud TTS API ---
+        const [response] = await ttsClient.synthesizeSpeech(request);
+        console.log('Received response from Google Cloud TTS API.');
 
-        if (stderr) {
-            // Check if it's a real error
-             console.warn("Edge TTS stderr:", stderr);
-             // Only throw if stderr clearly indicates an error
-             if (stderr.toLowerCase().includes('error') || stderr.toLowerCase().includes('traceback') || stderr.includes('command not found') || stderr.includes('enoent')) {
-                 // Throw a more specific error based on stderr content
-                 let errMsg = `Edge TTS command execution error: ${stderr}`;
-                 if (stderr.includes('command not found') || stderr.includes('enoent')) {
-                     errMsg = "Edge TTS command failed. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) in the server environment and Node's global bin directory is in the server's PATH.";
-                 }
-                throw new Error(errMsg);
-             }
-        }
-        console.log("Edge TTS stdout:", stdout); // May contain progress or success info
-        console.log(`Edge TTS command completed successfully.`);
-
-
-        // --- Step 2: Read the generated audio file ---
-         let audioBuffer: Buffer;
-        try {
-             audioBuffer = await fs.readFile(tempFilePath);
-             console.log(`Read temporary audio file (${audioBuffer.length} bytes).`);
-        } catch (readError: any) {
-             console.error(`Failed to read temporary audio file "${tempFilePath}":`, readError);
-             throw new Error(`Failed to read the generated audio file. Error: ${readError.message}`);
+        if (!response.audioContent) {
+            throw new Error('Google Cloud TTS API returned successfully but with no audio content.');
         }
 
+        // --- Step 2: Get the audio buffer ---
+        // response.audioContent is the audio buffer (Uint8Array or Buffer)
+        const audioBuffer = response.audioContent as Buffer; // Cast or ensure it's a Buffer
 
         if (audioBuffer.length === 0) {
-            console.error('Generated audio file is empty.');
-            // Check if the file exists but is empty, might indicate an issue during generation
-            try {
-                await fs.unlink(tempFilePath); // Clean up empty file
-            } catch (unlinkError) {
-                 console.warn(`Failed to delete empty temporary audio file "${tempFilePath}":`, unlinkError);
-            }
-            throw new Error('Generated audio file was empty. Edge TTS might have failed silently.');
+            throw new Error('Generated audio content is empty.');
         }
+        console.log(`Received audio buffer (${audioBuffer.length} bytes).`);
 
         // --- Step 3: Convert to Data URI ---
-        const audioDataUri = bufferToDataURI(audioBuffer, 'audio/mpeg'); // edge-tts default is mp3
+        const audioDataUri = bufferToDataURI(audioBuffer, 'audio/mpeg'); // Assuming MP3 encoding
         console.log("Successfully converted audio buffer to Data URI.");
 
-         // --- Step 4: Clean up temporary file ---
-        try {
-            await fs.unlink(tempFilePath);
-            console.log(`Deleted temporary audio file: ${tempFilePath}`);
-        } catch (unlinkError: any) {
-            // Log an error but don't fail the whole process if cleanup fails
-            console.warn(`Failed to delete temporary audio file "${tempFilePath}":`, unlinkError);
-        }
+        // No temporary file handling needed as we get the buffer directly
 
         return { audioDataUri };
 
-    } catch (error: any) {
-        console.error('Error caught in generateVoiceOverAudioFlow (Local Edge TTS - Node Package):', error);
+     } catch (error: any) {
+         console.error('Error caught in generateVoiceOverAudioFlow (Google Cloud TTS):', error);
 
-         // Attempt to clean up the temp file even if generation failed
-         try {
-            // Check if file exists before trying to unlink
-            if (await fs.stat(tempFilePath).then(() => true).catch(() => false)) {
-                 await fs.unlink(tempFilePath);
-                 console.log(`Cleaned up temporary file after error: ${tempFilePath}`);
-            }
-         } catch (cleanupError) {
-            console.warn(`Failed to clean up temporary file "${tempFilePath}" after error:`, cleanupError);
+        let errorMessage = 'Failed to generate voice over audio using Google Cloud TTS.';
+
+         if (error instanceof Error) {
+             // Check for common Google Cloud errors (e.g., authentication, quota)
+             if (error.message.includes('Could not refresh access token') || error.message.includes('credential')) {
+                 errorMessage += ' Potential authentication issue. Ensure Application Default Credentials (ADC) are configured correctly (run `gcloud auth application-default login`).';
+             } else if (error.message.includes('Quota') || error.message.includes('rate limit')) {
+                 errorMessage += ' API quota or rate limit exceeded. Check your Google Cloud project quotas.';
+             } else if (error.message.includes('invalid argument') && error.message.includes('Voice name')) {
+                 errorMessage += ` Invalid voice name specified: '${input.voiceName}'. Please check available voices for language '${input.languageCode}'.`;
+             }
+             // Include the original error message for more details
+             errorMessage += ` Details: ${error.message}`;
+         } else {
+             errorMessage += ' An unexpected error occurred.';
          }
 
-
-        let errorMessage = 'Failed to generate voice over audio using local Edge TTS.';
-        // Check for specific errors related to command execution
-        if (error.code === 'ENOENT' || (error.message && (error.message.includes('command not found') || error.message.includes('No such file or directory'))) ) {
-             // This usually means 'edge-tts' command itself failed
-              errorMessage = "Edge TTS command failed: 'edge-tts' command not found or inaccessible in the server environment. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) on the server and Node's global bin directory is included in the server's system PATH environment variable.";
-        } else if (error.stderr) {
-             // Include stderr if it likely contains the error reason
-             errorMessage += ` Stderr: ${error.stderr}`;
-        } else if (error.stdout) {
-             // Include stdout if it might contain useful error info (less likely for errors)
-             errorMessage += ` Stdout: ${error.stdout}`;
-        } else if (error instanceof Error) {
-            // General error message
-            errorMessage += ` Details: ${error.message}`;
-        } else {
-             errorMessage += ' An unexpected error occurred.';
-        }
-
-        console.error("Final Error Message to Throw:", errorMessage);
-        throw new Error(errorMessage);
-    }
+         console.error("Final Error Message to Throw:", errorMessage); // Log the detailed error message
+         throw new Error(errorMessage); // Throw the user-friendly message
+     }
 });

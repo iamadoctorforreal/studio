@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -17,22 +16,24 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, PlayCircle, Download, Mic } from 'lucide-react'; // Added Mic
+import { Loader2, PlayCircle, Download, Mic } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
-// Make sure the import path is correct and matches the updated flow file name/location
 import { generateVoiceOverAudio } from '@/ai/flows/generate-voice-over-audio';
-import type { GenerateVoiceOverAudioOutput, GenerateVoiceOverAudioInput } from '@/ai/flows/generate-voice-over-audio'; // Import input type too
+import type { GenerateVoiceOverAudioOutput, GenerateVoiceOverAudioInput } from '@/ai/flows/generate-voice-over-audio';
 
-// Update Zod schema to reflect the flow's input constraints (e.g., max length)
+// Updated form schema to reflect relevant Google TTS parameters (if user control is desired)
+// For now, keeping it simple, voice/language controlled in the flow defaults.
 const formSchema = z.object({
   articleText: z.string()
-    .min(1, { // Minimum length can be 1
+    .min(1, {
         message: "Article text cannot be empty.",
      })
-    .max(500000, { // Max length from UnrealSpeech docs
-        message: "Article text exceeds the maximum allowed length (500,000 characters)."
+    .max(100000, { // Adjusted max length based on flow comment
+        message: "Article text is very long (max 100,000 chars recommended)."
     }),
-  // Keep form schema simple, voice/bitrate controlled internally for now
+  // Example: Add fields if you want user to select voice/language
+  // languageCode: z.string().optional(),
+  // voiceName: z.string().optional(),
 });
 
 type VoiceOverFormValues = z.infer<typeof formSchema>;
@@ -43,14 +44,16 @@ interface VoiceOverGeneratorProps {
 
 const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleText = "" }) => {
   const [isLoading, setIsLoading] = useState(false);
-  // State now holds the full output object which includes the data URI
   const [audioResult, setAudioResult] = useState<GenerateVoiceOverAudioOutput | null>(null);
   const { toast } = useToast();
 
   const form = useForm<VoiceOverFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      articleText: initialArticleText || "", // Ensure default is string
+      articleText: initialArticleText || "",
+      // Set defaults if form fields are added:
+      // languageCode: 'en-US',
+      // voiceName: 'en-US-Standard-C',
     },
   });
 
@@ -61,7 +64,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
       setAudioResult(null); // Reset audio result when text changes
       // Trigger validation after reset if needed
       form.trigger('articleText');
-    }, [initialArticleText, form]); // form added as dependency
+    }, [initialArticleText, form]);
 
 
   const onSubmit = async (values: VoiceOverFormValues) => {
@@ -69,36 +72,37 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     setAudioResult(null);
     toast({
         title: "Generating Voice-Over",
-        description: "Creating UnrealSpeech synthesis task. This might take some time depending on text length...",
-        duration: 10000, // Longer duration for async task
+        description: "Sending request to Google Cloud Text-to-Speech...",
+        duration: 5000,
       });
 
     try {
-      // Construct the input for the flow, HARDCODING voiceId and bitrate as requested
+      // Construct the input for the Google Cloud TTS flow
+      // Uses defaults from the flow unless form controls are added
       const flowInput: GenerateVoiceOverAudioInput = {
         articleText: values.articleText,
-        voiceId: 'Sierra' // Hardcoded as requested
+        // Pass user-selected values if form fields exist:
+        // languageCode: values.languageCode,
+        // voiceName: values.voiceName,
       };
 
-      console.log("Calling generateVoiceOverAudio flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' }); // Log sanitized input
+      console.log("Calling generateVoiceOverAudio (Google Cloud TTS) flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' });
 
       const result = await generateVoiceOverAudio(flowInput);
-      setAudioResult(result); // Store the result containing the data URI
+      setAudioResult(result);
 
       toast({
         title: "Voice-Over Generated",
-        description: "Successfully generated the voice-over audio.",
+        description: "Successfully generated the voice-over audio using Google Cloud TTS.",
       });
-    } catch (error: any) { // Catch 'any' type for flexibility
-      console.error("Error generating voice-over:", error);
-       // Use the error message directly if it's an Error object, otherwise provide a generic message
+    } catch (error: any) {
+      console.error("Error generating voice-over (Google Cloud TTS):", error);
        const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred during voice-over generation.";
       toast({
         variant: "destructive",
         title: "Voice-Over Generation Failed",
-        // Display the specific error message from the flow
         description: errorMessage,
-        duration: 15000, // Show error longer
+        duration: 15000,
       });
     } finally {
       setIsLoading(false);
@@ -109,7 +113,6 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
    const getAudioMimeType = (dataUri: string | undefined): string => {
         if (!dataUri) return 'audio/mpeg'; // Default fallback
         try {
-            // Robust parsing: handle potential errors if format is unexpected
             const match = dataUri.match(/^data:(audio\/[^;]+);base64,/);
             if (match && match[1]) {
                 return match[1];
@@ -126,8 +129,8 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
   return (
      <Card>
         <CardHeader>
-            <CardTitle>Voice-Over Generator (UnrealSpeech)</CardTitle>
-            <CardDescription>Generate voice-over audio from the article text using the UnrealSpeech API. Generation may take time for long texts.</CardDescription>
+            <CardTitle>Voice-Over Generator (Google Cloud TTS)</CardTitle>
+            <CardDescription>Generate voice-over audio from the article text using the Google Cloud Text-to-Speech API.</CardDescription>
         </CardHeader>
         <CardContent>
              {!form.getValues('articleText') && !initialArticleText && (
@@ -147,23 +150,21 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                         <Textarea
                             placeholder="The formatted voice-over script will appear here once the article sections are generated..."
                             {...field}
-                             // Make read-only only if there's truly no initial text and it hasn't been populated yet
                             readOnly={!initialArticleText && !field.value}
                             className={`min-h-[250px] ${!initialArticleText && !field.value ? 'bg-muted' : 'bg-secondary/50'}`}
                             />
                         </FormControl>
                         <FormDescription>
-                          Review the script. Max {formSchema.shape.articleText._def.checks.find(c => c.kind === 'max')?.value.toLocaleString()} characters. Current: {field.value?.length.toLocaleString() ?? 0}
+                          Review the script. Max {formSchema.shape.articleText._def.checks.find(c => c.kind === 'max')?.value.toLocaleString()} characters recommended. Current: {field.value?.length.toLocaleString() ?? 0}
                         </FormDescription>
                         <FormMessage />
                     </FormItem>
                     )}
                 />
-                 {/* Optional: Add UI fields for VoiceId, Bitrate here if needed */}
+                 {/* Optional: Add UI fields for languageCode, voiceName here if needed */}
 
                 <Button
                      type="submit"
-                      // Disable if loading OR form is invalid OR text is empty
                       disabled={isLoading || !form.formState.isValid || !form.getValues('articleText')}
                      aria-label={isLoading ? "Generating audio, please wait" : "Generate Voice Over Audio"}
                  >
@@ -184,42 +185,38 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                     <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 bg-secondary rounded-md border">
                         <PlayCircle className="h-8 w-8 text-primary flex-shrink-0 mt-1 sm:mt-0" aria-hidden="true" />
                         <audio controls className="w-full" key={audioResult.audioDataUri} aria-label="Generated voice over audio player">
-                            {/* Dynamically set type based on data URI */}
                             <source src={audioResult.audioDataUri} type={getAudioMimeType(audioResult.audioDataUri)} />
                              Your browser does not support the audio element. Please use the download button.
                         </audio>
-                         {/* Download Button */}
                         <Button
                             variant="outline"
                             size="icon"
-                            asChild // Use asChild to make the button behave like a link
+                            asChild
                              className="flex-shrink-0"
                             aria-label="Download generated audio"
                          >
                             <a
                                 href={audioResult.audioDataUri}
-                                // Suggest a filename including voice and timestamp
                                 download={`news_automator_voice_${form.getValues('articleText')?.substring(0,10).replace(/\s+/g, '_') || 'audio'}_${Date.now()}.mp3`}
                             >
                                 <Download className="h-4 w-4" />
-                                {/* <span className="sr-only">Download Audio</span> */}
                             </a>
                         </Button>
                     </div>
                      <p className="text-xs text-muted-foreground text-center">Audio generated successfully. Play above or download the MP3 file.</p>
                 </div>
             )}
-             {/* Show message if generation finished without error BUT no URI was returned (should be rare with new logic) */}
+             {/* Show message if generation finished without error BUT no URI was returned */}
             { !isLoading && audioResult === null && form.formState.isSubmitSuccessful && (
                 <div className="mt-6 pt-6 border-t text-center">
-                    <p className="text-destructive">Audio generation process completed, but no audio data was received. This might indicate an issue during the final download or processing step. Please check the console logs or try again.</p>
+                    <p className="text-destructive">Audio generation process completed, but no audio data was received. Please check console logs or try again.</p>
                  </div>
             )}
              {/* Show message while loading */}
              {isLoading && (
                  <div className="mt-6 pt-6 border-t text-center flex items-center justify-center gap-2 text-muted-foreground">
                      <Loader2 className="h-5 w-5 animate-spin" />
-                     <span>Processing audio request... This may take a while for long texts.</span>
+                     <span>Processing audio request with Google Cloud TTS...</span>
                  </div>
              )}
         </CardContent>
