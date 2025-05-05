@@ -77,8 +77,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
       // Construct the input for the flow, HARDCODING voiceId and bitrate as requested
       const flowInput: GenerateVoiceOverAudioInput = {
         articleText: values.articleText,
-        voiceId: 'Sierra', // Hardcoded as requested
-        bitrate: '320k',   // Hardcoded as requested
+        voiceId: 'Sierra' // Hardcoded as requested
       };
 
       console.log("Calling generateVoiceOverAudio flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' }); // Log sanitized input
