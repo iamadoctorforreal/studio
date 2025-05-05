@@ -7,7 +7,7 @@
  * - GenerateVoiceOverAudioInput - The input type for the generateVoiceOverAudio function.
  * - GenerateVoiceOverAudioOutput - The return type for the generateVoiceOverAudio function.
  *
- * NOTE: This flow relies on having Node.js installed and the `@andresaya/edge-tts` package installed globally.
+ * NOTE: This flow relies on having Node.js installed and the `@andresaya/edge-tts` package installed globally *in the environment where the Next.js server is running*.
  * You can install it via npm: `npm install -g @andresaya/edge-tts`
  * It executes the `edge-tts` command-line tool provided by this package.
  */
@@ -80,7 +80,7 @@ let edgeTtsCheckPerformed = false;
 let edgeTtsAvailable = false;
 
 /**
- * Checks if the `edge-tts --version` command runs successfully.
+ * Checks if the `edge-tts --version` command runs successfully in the server environment.
  * Caches the result to avoid repeated checks.
  */
 async function checkEdgeTtsAvailability(): Promise<boolean> {
@@ -88,7 +88,7 @@ async function checkEdgeTtsAvailability(): Promise<boolean> {
         return edgeTtsAvailable;
     }
 
-    console.log("Performing initial check for Edge TTS availability (using @andresaya/edge-tts)...");
+    console.log("Performing initial check for Edge TTS availability (using @andresaya/edge-tts on server)...");
     try {
         // Use a short timeout for the version check
         const { stdout, stderr } = await execAsync('edge-tts --version', { timeout: 5000 });
@@ -100,16 +100,16 @@ async function checkEdgeTtsAvailability(): Promise<boolean> {
                  throw new Error(`Edge TTS version check failed: ${stderr}`);
             }
         }
-        console.log("@andresaya/edge-tts seems available.");
+        console.log("@andresaya/edge-tts seems available on the server.");
         edgeTtsAvailable = true;
     } catch (error: any) {
-        console.error("Edge TTS availability check failed:", error);
+        console.error("Edge TTS availability check failed on the server:", error);
         edgeTtsAvailable = false;
          // Provide specific guidance based on common errors
          if (error.message.includes('command not found') || error.code === 'ENOENT') {
-             console.error("Error Suggestion: 'edge-tts' command not found. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) and Node's global bin directory is in your system's PATH.");
+             console.error("Error Suggestion: 'edge-tts' command not found in the server's PATH. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) in the server environment and Node's global bin directory is in the system's PATH.");
          } else {
-              console.error("Error Suggestion: Unexpected error during Edge TTS check. Verify Node.js and npm installation and PATH configuration.");
+              console.error("Error Suggestion: Unexpected error during Edge TTS check on the server. Verify Node.js and npm installation and PATH configuration in the server environment.");
          }
     }
     edgeTtsCheckPerformed = true;
@@ -123,11 +123,11 @@ export async function generateVoiceOverAudio(
   // Validate input using Zod before calling the flow
   const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
 
-  // Perform the availability check
+  // Perform the availability check in the server environment
   const isAvailable = await checkEdgeTtsAvailability();
   if (!isAvailable) {
     // Throw a user-friendly error if the check failed
-    throw new Error("Local Edge TTS setup issue: Could not run 'edge-tts' command. Please ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) and your Node.js global bin directory is included in your system's PATH. Check server logs for details.");
+    throw new Error("Local Edge TTS setup issue (Server Environment): Could not run the 'edge-tts' command. Please ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) *on the server* and the Node.js global bin directory is included in the server's system PATH. Check server logs for more specific errors (like 'command not found').");
   }
 
   // If check passed, proceed with the generation flow
@@ -186,7 +186,7 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
                  // Throw a more specific error based on stderr content
                  let errMsg = `Edge TTS command execution error: ${stderr}`;
                  if (stderr.includes('command not found') || stderr.includes('enoent')) {
-                     errMsg = "Edge TTS command failed. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) and Node's global bin directory is in your PATH.";
+                     errMsg = "Edge TTS command failed. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) in the server environment and Node's global bin directory is in the server's PATH.";
                  }
                 throw new Error(errMsg);
              }
@@ -251,7 +251,7 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
         // Check for specific errors related to command execution
         if (error.code === 'ENOENT' || (error.message && (error.message.includes('command not found') || error.message.includes('No such file or directory'))) ) {
              // This usually means 'edge-tts' command itself failed
-              errorMessage = "Edge TTS command failed: 'edge-tts' command not found or inaccessible. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) and Node's global bin directory is included in the system's PATH environment variable.";
+              errorMessage = "Edge TTS command failed: 'edge-tts' command not found or inaccessible in the server environment. Ensure '@andresaya/edge-tts' is installed globally (`npm install -g @andresaya/edge-tts`) on the server and Node's global bin directory is included in the server's system PATH environment variable.";
         } else if (error.stderr) {
              // Include stderr if it likely contains the error reason
              errorMessage += ` Stderr: ${error.stderr}`;
