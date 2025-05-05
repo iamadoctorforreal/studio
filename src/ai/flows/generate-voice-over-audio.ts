@@ -29,21 +29,23 @@ const DEFAULT_AUDIO_ENCODING: protos.google.cloud.texttospeech.v1.AudioEncoding 
 // or service account credentials via GOOGLE_APPLICATION_CREDENTIALS env var for servers/VMs,
 // or built-in service accounts for Cloud Run/Functions/App Engine).
 let ttsClient: textToSpeech.TextToSpeechClient | null = null;
+let ttsInitializationError: Error | null = null; // Store initialization error
+
 try {
     ttsClient = new textToSpeech.TextToSpeechClient();
     console.log("Google Cloud Text-to-Speech client initialized successfully.");
 } catch (initError: any) {
+    ttsInitializationError = initError; // Store the error
     console.error("FATAL: Failed to initialize Google Cloud Text-to-Speech client.", initError);
-    // If initialization fails, subsequent calls will also fail.
-    // Log a more detailed error message here.
+    // Log detailed message
      let initErrorMessage = "FATAL ERROR initializing Google Cloud TTS Client. ";
      if (initError.message.includes('Could not load the default credentials') || initError.message.includes('Could not refresh access token')) {
-         initErrorMessage += "Authentication failed. Ensure Application Default Credentials (ADC) are configured correctly in the server environment. For local development, run `gcloud auth application-default login`. For servers/VMs, set the GOOGLE_APPLICATION_CREDENTIALS environment variable pointing to your service account key file. On Google Cloud platforms (Cloud Run, Functions, App Engine, GKE), ensure the runtime service account has the 'roles/cloudtts.serviceAgent' role.";
+         initErrorMessage += "Authentication failed during client initialization. Ensure Application Default Credentials (ADC) are configured correctly in the server environment. For local development, run `gcloud auth application-default login`. For servers/VMs, set the GOOGLE_APPLICATION_CREDENTIALS environment variable pointing to your service account key file. On Google Cloud platforms (Cloud Run, Functions, App Engine, GKE), ensure the runtime service account has the 'roles/cloudtts.serviceAgent' role.";
      } else {
          initErrorMessage += `Details: ${initError.message}`;
      }
      console.error(initErrorMessage);
-     // We don't throw here, but the generate flow will fail if the client is null.
+     // We don't throw here, but the generate flow will fail if the client is null or the initialization error is present.
 }
 
 
@@ -132,9 +134,18 @@ export async function generateVoiceOverAudio(
   // Validate input using Zod before calling the flow
   const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
 
-  // Check if the client was initialized successfully
-  if (!ttsClient) {
-        throw new Error("Google Cloud Text-to-Speech client failed to initialize. Check server logs for authentication issues. Ensure ADC or GOOGLE_APPLICATION_CREDENTIALS is set up correctly.");
+  // Check if the client failed to initialize at startup
+  if (!ttsClient || ttsInitializationError) {
+        let initErrorMessage = "Google Cloud Text-to-Speech client failed to initialize. ";
+        if (ttsInitializationError && (ttsInitializationError.message.includes('Could not load the default credentials') || ttsInitializationError.message.includes('Could not refresh access token'))) {
+            initErrorMessage += "Authentication failed during startup. Ensure Application Default Credentials (ADC) are configured correctly in the server environment. For local development, run `gcloud auth application-default login`. For servers/VMs, set the GOOGLE_APPLICATION_CREDENTIALS environment variable pointing to your service account key file. On Google Cloud platforms (Cloud Run, Functions, App Engine, GKE), ensure the runtime service account has the 'roles/cloudtts.serviceAgent' role.";
+        } else if (ttsInitializationError) {
+            initErrorMessage += `Details: ${ttsInitializationError.message}`;
+        } else {
+            initErrorMessage += "Client is null, initialization may have failed silently.";
+        }
+        console.error("Pre-flow Check Failed:", initErrorMessage);
+        throw new Error(initErrorMessage); // Throw the specific error here
   }
 
   return generateVoiceOverAudioFlow(validatedInput);
@@ -150,9 +161,9 @@ const generateVoiceOverAudioFlow = ai.defineFlow<
   outputSchema: GenerateVoiceOverAudioOutputSchema,
 },
 async (input): Promise<GenerateVoiceOverAudioOutput> => {
+    // Re-check client status within the flow for robustness, though the wrapper should catch it first.
     if (!ttsClient) {
-        // This check is redundant if the wrapper function already checks, but good for safety.
-        throw new Error("Google Cloud Text-to-Speech client is not initialized. Authentication likely failed during startup. Check server logs.");
+        throw new Error("Google Cloud Text-to-Speech client is not available. Check server startup logs for initialization/authentication errors.");
     }
     if (!input.articleText || input.articleText.trim().length === 0) {
         throw new Error('Article text cannot be empty.');
@@ -232,7 +243,7 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
          if (error instanceof Error) {
              // Check for common Google Cloud errors (e.g., authentication, quota)
              // Enhanced Authentication Error Check
-             if (error.message.includes('Could not refresh access token') || error.message.includes('credential') || error.message.includes('Could not load the default credentials') || (error.code && error.code === 16) /* UNAUTHENTICATED */ || error.message.includes('permission')) {
+              if (error.message.includes('Could not refresh access token') || error.message.includes('credential') || error.message.includes('Could not load the default credentials') || (error.code && error.code === 16) /* UNAUTHENTICATED */ || error.message.includes('permission') || error.message.includes('metadata plugin')) {
                 errorMessage = "Google Cloud TTS Authentication/Permission Error. ";
                 errorMessage += "Ensure Application Default Credentials (ADC) are configured correctly in the **server environment** and have necessary permissions. ";
                 errorMessage += "Options: \n";
