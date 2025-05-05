@@ -1,4 +1,3 @@
-
 'use server';
 
 /**
@@ -11,7 +10,7 @@
  * NOTE: This flow relies on having Python and the `edge-tts` Python package installed
  * in the environment where the Next.js server is running.
  * You can install it via pip: `pip install edge-tts`
- * It executes the `edge-tts` command-line tool.
+ * It executes the `edge-tts` Python module.
  */
 
 import { ai } from '@/ai/ai-instance';
@@ -84,13 +83,17 @@ export async function generateVoiceOverAudio(
   // Validate input using Zod before calling the flow
   const validatedInput = GenerateVoiceOverAudioInputSchema.parse(input);
 
-  // Optional: Add a check here to see if the `edge-tts` command exists?
-  // This could involve running `edge-tts --version` or similar.
+  // Optional: Add a check here to see if the `python -m edge_tts --version` command exists?
+  // This could involve running `python -m edge_tts --version` or similar.
   // try {
-  //   await execAsync('edge-tts --version');
-  // } catch (error) {
-  //    console.error("`edge-tts` command not found or failed:", error);
-  //    throw new Error("Local Edge TTS tool is not available or not working. Please ensure Python and `pip install edge-tts` are set up correctly.");
+  //   await execAsync('python -m edge_tts --version');
+  // } catch (error: any) {
+  //    console.error("`python -m edge_tts` command failed:", error);
+  //    let errMsg = "Local Edge TTS Python module is not available or not working. Please ensure Python is installed and in the PATH, and run `pip install edge-tts`.";
+  //    if (error.message.includes('command not found') || error.code === 'ENOENT') {
+  //        errMsg = "Python command not found. Please ensure Python is installed and its directory is included in the system's PATH environment variable.";
+  //    }
+  //    throw new Error(errMsg);
   // }
 
   return generateVoiceOverAudioFlow(validatedInput);
@@ -115,25 +118,25 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
     const tempFilePath = path.join(os.tmpdir(), `edge-tts-output-${Date.now()}.mp3`);
     console.log(`Generating temporary audio file at: ${tempFilePath}`);
 
-    // Construct the command
+    // Construct the command using 'python -m edge_tts'
     // Ensure text is properly escaped for the shell
     const escapedText = escapeShellArg(input.articleText);
-    const command = `edge-tts --voice ${input.voiceId} --text ${escapedText} --write-media ${escapeShellArg(tempFilePath)}`;
+    const command = `python -m edge_tts --voice ${input.voiceId} --text ${escapedText} --write-media ${escapeShellArg(tempFilePath)}`;
 
-    console.log(`Executing command: edge-tts --voice ${input.voiceId} --text '...' --write-media '${tempFilePath}'`); // Log sanitized command
+    console.log(`Executing command: python -m edge_tts --voice ${input.voiceId} --text '...' --write-media '${tempFilePath}'`); // Log sanitized command
 
 
     try {
-        // --- Step 1: Execute edge-tts command ---
+        // --- Step 1: Execute edge-tts command via Python module ---
         const { stdout, stderr } = await execAsync(command, { timeout: 180000 }); // 3 minute timeout, adjust as needed
 
         if (stderr) {
-            // edge-tts might print progress or info to stderr, so check if it's a real error
+            // edge-tts might print progress or info to stderr, check if it's a real error
              console.warn("Edge TTS stderr:", stderr);
-             // Consider only throwing if stderr indicates a failure pattern
-             // if (stderr.toLowerCase().includes('error')) {
-             //    throw new Error(`Edge TTS process reported an error: ${stderr}`);
-             // }
+             // Only throw if stderr clearly indicates a Python or edge-tts module error
+             if (stderr.toLowerCase().includes('error:') || stderr.toLowerCase().includes('traceback')) {
+                throw new Error(`Edge TTS Python module reported an error: ${stderr}`);
+             }
         }
         console.log("Edge TTS stdout:", stdout); // Usually empty unless there's info output
         console.log(`Edge TTS command completed successfully.`);
@@ -185,14 +188,21 @@ async (input: GenerateVoiceOverAudioInput): Promise<GenerateVoiceOverAudioOutput
 
 
         let errorMessage = 'Failed to generate voice over audio using local Edge TTS.';
-        if (error.code === 'ENOENT') {
-             errorMessage = 'Edge TTS command failed: `edge-tts` not found. Please ensure Python, pip, and `pip install edge-tts` are correctly set up and `edge-tts` is in the system PATH.';
+        // Check for specific errors related to command execution
+        if (error.code === 'ENOENT' || (error.stderr && error.stderr.includes('command not found'))) {
+             if (error.cmd?.startsWith('python')) {
+                 errorMessage = 'Edge TTS command failed: `python` not found or `edge-tts` module error. Please ensure Python is installed, in the PATH, and run `pip install edge-tts`. Check Python environment.';
+             } else {
+                 errorMessage = 'Edge TTS command failed: Check if `edge-tts` is installed correctly (`pip install edge-tts`) and accessible via `python -m edge_tts`.';
+             }
         } else if (error.stderr) {
+             // Include stderr if it likely contains the error reason
              errorMessage += ` Stderr: ${error.stderr}`;
         } else if (error.stdout) {
              // Include stdout if it might contain useful error info
              errorMessage += ` Stdout: ${error.stdout}`;
         } else if (error instanceof Error) {
+            // General error message
             errorMessage += ` Details: ${error.message}`;
         } else {
              errorMessage += ' An unexpected error occurred.';
