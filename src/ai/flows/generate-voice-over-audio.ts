@@ -16,6 +16,7 @@ import path from 'path'; // For handling file paths
 import os from 'os'; // For finding temporary directory
 
 // --- Constants ---
+const GOOGLE_TTS_MAX_CHARS = 4900; // Stay slightly under the 5000 limit for safety
 // Default voice configuration for Google Cloud TTS
 const DEFAULT_LANGUAGE_CODE = 'en-US';
 // Using a standard voice, WaveNet voices might incur higher costs.
@@ -51,7 +52,7 @@ const GenerateVoiceOverAudioInputSchema = z.object({
     .string()
     .min(1, "Article text cannot be empty.")
     // Google Cloud TTS has limits, but they are typically high (e.g., 5000 bytes per request for standard API)
-    // Adjust based on potential usage and expected article length.
+    // We will handle splitting internally, but keep a reasonable overall limit.
     .max(100000, "Article text is very long, consider breaking it down for synthesis.")
     .describe('The formatted article text to generate voice-over audio from.'),
   languageCode: z.string().optional().default(DEFAULT_LANGUAGE_CODE).describe('BCP-47 language code (e.g., en-US, en-GB).'),
@@ -78,6 +79,50 @@ function bufferToDataURI(buffer: Buffer | ArrayBuffer, mimeType: string): string
     }
     const base64String = Buffer.isBuffer(buffer) ? buffer.toString('base64') : Buffer.from(buffer).toString('base64');
     return `data:${mimeType};base64,${base64String}`;
+}
+
+/**
+ * Splits text into chunks smaller than the specified limit, trying to split at sentence boundaries.
+ * @param text The full text to split.
+ * @param limit The maximum character limit per chunk.
+ * @returns An array of text chunks.
+ */
+function splitTextIntoChunks(text: string, limit: number): string[] {
+    const chunks: string[] = [];
+    let currentChunk = '';
+    // Split by sentence-ending punctuation followed by space or newline. Handles ., !, ?
+    const sentences = text.split(/(?<=[.!?])(?:\s+|\n)/).filter(s => s.trim().length > 0);
+
+    for (const sentence of sentences) {
+        const trimmedSentence = sentence.trim();
+        if (trimmedSentence.length === 0) continue;
+
+        // If a single sentence is too long, split it hard (less ideal)
+        if (trimmedSentence.length > limit) {
+            console.warn(`Single sentence exceeds limit (${trimmedSentence.length}/${limit}). Splitting mid-sentence.`);
+            if (currentChunk) { // Add the current chunk before the long sentence
+                chunks.push(currentChunk);
+                currentChunk = '';
+            }
+            // Hard split the long sentence
+            for (let i = 0; i < trimmedSentence.length; i += limit) {
+                chunks.push(trimmedSentence.substring(i, i + limit));
+            }
+        } else if (currentChunk.length + trimmedSentence.length + 1 <= limit) { // +1 for potential space
+            currentChunk += (currentChunk ? ' ' : '') + trimmedSentence;
+        } else {
+            // Current chunk is full, push it and start a new one
+            chunks.push(currentChunk);
+            currentChunk = trimmedSentence;
+        }
+    }
+
+    // Add the last remaining chunk
+    if (currentChunk) {
+        chunks.push(currentChunk);
+    }
+
+    return chunks;
 }
 
 
@@ -115,80 +160,81 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
 
     console.log(`Starting Google Cloud TTS Flow for text (${input.articleText.length} chars) using voice: ${input.voiceName}, lang: ${input.languageCode}`);
 
-    // Construct the synthesis request for Google Cloud TTS
-    const request: protos.google.cloud.texttospeech.v1.ISynthesizeSpeechRequest = {
-        input: { text: input.articleText },
-        voice: {
-            languageCode: input.languageCode,
-            name: input.voiceName,
-            // ssmlGender can be added if needed, e.g., 'NEUTRAL', 'FEMALE', 'MALE'
-        },
-        audioConfig: {
-            audioEncoding: DEFAULT_AUDIO_ENCODING,
-             // You can add speakingRate, pitch, volumeLevel, effectsProfileId etc. here
-             // speakingRate: 1.0, // Default
-             // pitch: 0, // Default
-        },
-    };
+    // Split the input text into manageable chunks
+    const textChunks = splitTextIntoChunks(input.articleText, GOOGLE_TTS_MAX_CHARS);
+    console.log(`Text split into ${textChunks.length} chunks for synthesis.`);
 
-    const tempFileName = `gtts-output-${Date.now()}.mp3`;
-    const tempDir = os.tmpdir();
-    const tempFilePath = path.join(tempDir, tempFileName);
+    const audioBuffers: Buffer[] = [];
 
     try {
-        console.log('Sending request to Google Cloud Text-to-Speech API...');
-        // --- Step 1: Call Google Cloud TTS API ---
-        const [response] = await ttsClient.synthesizeSpeech(request);
-        console.log('Received response from Google Cloud TTS API.');
+        // Process each chunk sequentially
+        for (let i = 0; i < textChunks.length; i++) {
+            const chunk = textChunks[i];
+            console.log(`Synthesizing chunk ${i + 1}/${textChunks.length} (${chunk.length} chars)...`);
 
-        if (!response.audioContent) {
-            throw new Error('Google Cloud TTS API returned successfully but with no audio content.');
+            // Construct the synthesis request for Google Cloud TTS
+            const request: protos.google.cloud.texttospeech.v1.ISynthesizeSpeechRequest = {
+                input: { text: chunk },
+                voice: {
+                    languageCode: input.languageCode,
+                    name: input.voiceName,
+                    // ssmlGender can be added if needed, e.g., 'NEUTRAL', 'FEMALE', 'MALE'
+                },
+                audioConfig: {
+                    audioEncoding: DEFAULT_AUDIO_ENCODING,
+                    // You can add speakingRate, pitch, volumeLevel, effectsProfileId etc. here
+                    // speakingRate: 1.0, // Default
+                    // pitch: 0, // Default
+                },
+            };
+
+            console.log('Sending request to Google Cloud Text-to-Speech API for chunk...');
+            // --- Step 1: Call Google Cloud TTS API for the chunk ---
+            const [response] = await ttsClient.synthesizeSpeech(request);
+            console.log(`Received response for chunk ${i + 1}`);
+
+            if (!response.audioContent) {
+                throw new Error(`Google Cloud TTS API returned successfully but with no audio content for chunk ${i + 1}.`);
+            }
+
+            // --- Step 2: Get the audio buffer for the chunk ---
+            const audioBuffer = response.audioContent as Buffer; // Cast or ensure it's a Buffer
+
+            if (audioBuffer.length === 0) {
+                console.warn(`Generated audio content for chunk ${i + 1} is empty.`);
+                // Decide if you want to continue or throw an error. Continuing might result in gaps.
+                // For now, let's throw an error if a chunk produces empty audio.
+                throw new Error(`Generated audio content for chunk ${i + 1} was empty.`);
+            }
+            console.log(`Received audio buffer for chunk ${i + 1} (${audioBuffer.length} bytes).`);
+            audioBuffers.push(audioBuffer);
         }
 
-        // --- Step 2: Get the audio buffer ---
-        // response.audioContent is the audio buffer (Uint8Array or Buffer)
-        const audioBuffer = response.audioContent as Buffer; // Cast or ensure it's a Buffer
-
-        if (audioBuffer.length === 0) {
-            throw new Error('Generated audio content is empty.');
+        // --- Step 3: Concatenate all audio buffers ---
+        if (audioBuffers.length === 0) {
+            throw new Error("No audio buffers were generated (perhaps the input text was empty after splitting?).");
         }
-        console.log(`Received audio buffer (${audioBuffer.length} bytes).`);
 
-        // --- Step 3: Convert to Data URI ---
-        // Save temporarily to disk then read back - less ideal but matches previous structure
-        // await fs.writeFile(tempFilePath, audioBuffer, 'binary');
-        // console.log(`Temporarily saved audio to ${tempFilePath}`);
-        // const fileBuffer = await fs.readFile(tempFilePath);
-        // console.log(`Read temporary audio file (${fileBuffer.length} bytes).`);
-        // const audioDataUri = bufferToDataURI(fileBuffer, 'audio/mpeg');
+        const combinedBuffer = Buffer.concat(audioBuffers);
+        console.log(`Combined audio buffers into a single buffer (${combinedBuffer.length} bytes).`);
 
-        // Direct conversion (more efficient):
-        const audioDataUri = bufferToDataURI(audioBuffer, 'audio/mpeg');
-        console.log("Successfully converted audio buffer to Data URI.");
-
-
-        // Clean up temporary file if it was created (no longer needed with direct conversion)
-        // try {
-        //     await fs.unlink(tempFilePath);
-        //     console.log(`Cleaned up temporary file: ${tempFilePath}`);
-        // } catch (unlinkError) {
-        //     console.warn(`Failed to delete temporary audio file "${tempFilePath}":`, unlinkError);
-        // }
-
+        // --- Step 4: Convert combined buffer to Data URI ---
+        const audioDataUri = bufferToDataURI(combinedBuffer, 'audio/mpeg'); // Assuming MP3 encoding
+        console.log("Successfully converted combined audio buffer to Data URI.");
 
         return { audioDataUri };
 
      } catch (error: any) {
-         console.error('Error caught in generateVoiceOverAudioFlow (Google Cloud TTS):', error);
+         console.error('Error caught in generateVoiceOverAudioFlow (Google Cloud TTS with chunking):', error);
 
         let errorMessage = 'Failed to generate voice over audio using Google Cloud TTS.';
 
          if (error instanceof Error) {
              // Check for common Google Cloud errors (e.g., authentication, quota)
              // Enhanced Authentication Error Check
-             if (error.message.includes('Could not refresh access token') || error.message.includes('credential') || error.message.includes('Could not load the default credentials') || (error.code && error.code === 16) /* UNAUTHENTICATED */) {
-                errorMessage = "Google Cloud TTS Authentication Error. ";
-                errorMessage += "Ensure Application Default Credentials (ADC) are configured correctly in the **server environment**. ";
+             if (error.message.includes('Could not refresh access token') || error.message.includes('credential') || error.message.includes('Could not load the default credentials') || (error.code && error.code === 16) /* UNAUTHENTICATED */ || error.message.includes('permission')) {
+                errorMessage = "Google Cloud TTS Authentication/Permission Error. ";
+                errorMessage += "Ensure Application Default Credentials (ADC) are configured correctly in the **server environment** and have necessary permissions. ";
                 errorMessage += "Options: \n";
                 errorMessage += "1. **Local Dev:** Run `gcloud auth application-default login` in your terminal.\n";
                 errorMessage += "2. **Server/VM:** Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of your service account key file.\n";
@@ -213,17 +259,6 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
 
          console.error("Final Error Message to Throw:", errorMessage); // Log the detailed error message
          throw new Error(errorMessage); // Throw the user-friendly message
-     } finally {
-         // Ensure temp file cleanup if it exists (relevant if saving to disk was used)
-        // try {
-        //    if (await fs.stat(tempFilePath).then(() => true).catch(() => false)) {
-        //        await fs.unlink(tempFilePath);
-        //        console.log(`Ensured cleanup of temporary file: ${tempFilePath}`);
-        //    }
-        // } catch (cleanupError) {
-        //    console.warn(`Failed final cleanup of temporary file "${tempFilePath}":`, cleanupError);
-        // }
      }
+     // No finally block needed for temp file cleanup as we are not saving to disk anymore
 });
-
-    
