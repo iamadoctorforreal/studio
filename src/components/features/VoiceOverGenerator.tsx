@@ -21,7 +21,19 @@ import { Loader2, PlayCircle, Download, Mic } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { generateVoiceOverAudio } from '@/ai/flows/generate-voice-over-audio';
 import type { GenerateVoiceOverAudioOutput, GenerateVoiceOverAudioInput } from '@/ai/flows/generate-voice-over-audio';
-import { Input } from '@/components/ui/input'; // Import Input for voice ID
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+import { getEdgeTTSVoiceList } from '@/ai/flows/generate-voice-over-audio'; // to list the voice list
+
+
+
+
 
 // Default voice for Edge TTS
 const DEFAULT_VOICE_ID = 'en-US-AriaNeural';
@@ -47,6 +59,7 @@ interface VoiceOverGeneratorProps {
 const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleText = "" }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [audioResult, setAudioResult] = useState<GenerateVoiceOverAudioOutput | null>(null);
+  const [voiceOptions, setVoiceOptions] = useState<string[]>([]);
   const { toast } = useToast();
 
   const form = useForm<VoiceOverFormValues>({
@@ -68,6 +81,23 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
       // Trigger validation after reset if needed
       form.trigger('articleText');
     }, [initialArticleText, form]);
+    
+
+    useEffect(() => {
+      async function fetchVoices() {
+        try {
+          const voices = await getEdgeTTSVoiceList();
+          const voiceNames = voices.map((v) => v.voiceId); // assuming this is the correct field
+          setVoiceOptions(voiceNames);
+        } catch (error) {
+          console.error("Failed to load Edge TTS voices:", error);
+          setVoiceOptions([DEFAULT_VOICE_ID]); // fallback
+        }
+      }
+      fetchVoices();
+    }, []);
+    
+    
 
 
   const onSubmit = async (values: VoiceOverFormValues) => {
@@ -89,6 +119,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
       console.log("Calling generateVoiceOverAudio (Edge TTS) flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' });
 
       const result = await generateVoiceOverAudio(flowInput);
+      console.log("Voice-over generation result:", result);
       setAudioResult(result);
 
       toast({
@@ -165,7 +196,8 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                     )}
                 />
                  {/* Voice ID Input */}
-                 <FormField
+
+               {/*  <FormField
                     control={form.control}
                     name="voiceId"
                     render={({ field }) => (
@@ -175,12 +207,40 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                                 <Input placeholder="e.g., en-US-AriaNeural" {...field} />
                             </FormControl>
                             <FormDescription>
-                                The voice model to use. Find available voices by running <code className='bg-muted px-1 rounded'>edge-tts --list-voices</code> in your terminal.
+                                The voice model to use. Find available voices by running <code className='bg-muted px-1 rounded'>edge-tts voice-list</code> in your terminal.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
                     )}
-                    />
+                    /> */}
+
+<FormField
+  control={form.control}
+  name="voiceId"
+  render={({ field }) => (
+    <FormItem>
+      <FormLabel>Edge TTS Voice</FormLabel>
+      <Select onValueChange={field.onChange} defaultValue={field.value}>
+        <FormControl>
+          <SelectTrigger>
+            <SelectValue placeholder="Select a voice" />
+          </SelectTrigger>
+        </FormControl>
+        <SelectContent>
+          {voiceOptions.map((voice) => (
+            <SelectItem key={voice} value={voice}>
+              {voice}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FormDescription>
+        Pick from available Edge TTS voices. You can also run <code className="bg-muted px-1 rounded">edge-tts voice-list</code> in your terminal.
+      </FormDescription>
+      <FormMessage />
+    </FormItem>
+  )}
+/>
 
 
                 <Button
@@ -227,11 +287,20 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                 </div>
             )}
              {/* Show message if generation finished without error BUT no URI was returned */}
-            { !isLoading && audioResult === null && form.formState.isSubmitSuccessful && (
+           
+         {/*   { !isLoading && audioResult === null && form.formState.isSubmitSuccessful && (
                 <div className="mt-6 pt-6 border-t text-center">
                     <p className="text-destructive">Audio generation process completed, but no audio data was received. Please check console logs or try again.</p>
                  </div>
-            )}
+            )} */}
+
+              {!isLoading && form.formState.isSubmitSuccessful && (!audioResult || !audioResult.audioDataUri) && (
+                <div className="mt-6 pt-6 border-t text-center">
+                    <p className="text-destructive">Audio generation completed, but no audio was returned. Please check logs or try again.</p>
+                </div>
+             )}
+
+
              {/* Show message while loading */}
              {isLoading && (
                  <div className="mt-6 pt-6 border-t text-center flex items-center justify-center gap-2 text-muted-foreground">

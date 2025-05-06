@@ -60,11 +60,11 @@ function bufferToDataURI(buffer: Buffer | ArrayBuffer, mimeType: string): string
  */
 async function checkEdgeTTSAvailability(): Promise<boolean> {
     try {
-        // Use `edge-tts --list-voices` as a relatively lightweight check
+        // Use `edge-tts voice-list` as a relatively lightweight check
         // The command should exist if the global package is installed and in PATH.
-        console.log("Checking edge-tts availability by running 'edge-tts --list-voices'...");
+        console.log("Checking edge-tts availability by running 'edge-tts voice-list'...");
         // Increased timeout for potentially slower systems or first run
-        const { stdout, stderr } = await execAsync('edge-tts --list-voices', { timeout: 30000 });
+        const { stdout, stderr } = await execAsync('edge-tts voice-list', { timeout: 30000 });
         if (stderr && !stderr.toLowerCase().includes('file downloaded successfully')) { // Ignore download messages
             console.warn("edge-tts availability check stderr:", stderr);
             // Some warnings might not be critical failures, but log them.
@@ -75,7 +75,7 @@ async function checkEdgeTTSAvailability(): Promise<boolean> {
              return true;
         }
         // If stdout is empty or doesn't contain expected output, but didn't throw, it might still be an issue.
-        console.warn("edge-tts --list-voices command executed but output was unexpected. Assuming unavailable.", {stdout, stderr});
+        console.warn("edge-tts voice-list command executed but output was unexpected. Assuming unavailable.", {stdout, stderr});
         return false;
 
     } catch (error: any) {
@@ -91,6 +91,28 @@ async function checkEdgeTTSAvailability(): Promise<boolean> {
     }
 }
 
+/**
+ * Lists available voices from the Edge TTS CLI using `edge-tts voice-list`.
+ * Returns the raw output string.
+ */
+export async function getEdgeTTSVoiceList(): Promise<any[]> {
+    try {
+      const { stdout, stderr } = await execAsync('edge-tts voice-list', {
+        env: { ...process.env, LANG: 'en_US.UTF-8' },
+        timeout: 30000,
+      });
+  
+      if (stderr && !stderr.toLowerCase().includes('file downloaded successfully')) {
+        console.warn("getEdgeTTSVoiceList stderr:", stderr);
+      }
+  
+      return JSON.parse(stdout);
+    } catch (err) {
+      console.error("Error fetching Edge TTS voice list:", err);
+      throw new Error("Could not fetch Edge TTS voice list. Ensure edge-tts is installed and accessible.");
+    }
+  }
+  
 // --- Input/Output Schemas ---
 
 const GenerateVoiceOverAudioInputSchema = z.object({
@@ -99,7 +121,7 @@ const GenerateVoiceOverAudioInputSchema = z.object({
     .min(1, "Article text cannot be empty.")
     .max(100000, "Article text is very long, consider breaking it down further if issues arise.")
     .describe('The formatted article text to generate voice-over audio from.'),
-  voiceId: z.string().optional().default(DEFAULT_VOICE_ID).describe('Edge TTS voice ID (e.g., en-US-AriaNeural). Run `edge-tts --list-voices` to see available voices.'),
+  voiceId: z.string().optional().default(DEFAULT_VOICE_ID).describe('Edge TTS voice ID (e.g., en-US-AriaNeural). Run `edge-tts voice-list` to see available voices.'),
   // Removed Google TTS specific fields (languageCode, voiceName, bitrate)
 });
 export type GenerateVoiceOverAudioInput = z.infer<typeof GenerateVoiceOverAudioInputSchema>;
