@@ -39,3 +39,7 @@ next-env.d.ts
 
 .genkit/*
 .env*
+
+
+
+/news-automator-vth74-keys-gcp-tts-credentials.json

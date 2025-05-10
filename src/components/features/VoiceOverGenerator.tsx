@@ -29,25 +29,27 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { getEdgeTTSVoiceList } from '@/ai/flows/generate-voice-over-audio'; // to list the voice list
+// Updated import for Google TTS voice list
+import { getGoogleTTSVoiceList } from '@/ai/flows/generate-voice-over-audio'; 
+import type { protos } from '@google-cloud/text-to-speech'; // For Google voice type
 
+// TODO: Update default voice and form schema for Google TTS
+const DEFAULT_VOICE_ID_PLACEHOLDER = 'en-US-Standard-C'; // Placeholder, will be Google Voice Name
+const DEFAULT_LANGUAGE_CODE_PLACEHOLDER = 'en-US';
 
-
-
-
-// Default voice for Edge TTS
-const DEFAULT_VOICE_ID = 'en-US-AriaNeural';
-
-// Updated form schema for Edge TTS
+// TODO: This schema needs to be updated to reflect Google TTS voice parameters (e.g., voiceName, languageCode)
+// For now, it will send the old voiceId, and the backend will use a default Google voice.
 const formSchema = z.object({
   articleText: z.string()
     .min(1, {
         message: "Article text cannot be empty.",
      })
-    .max(100000, { // Max length based on flow comment
+    .max(100000, { 
         message: "Article text is very long (max 100,000 chars recommended)."
     }),
-  voiceId: z.string().min(1, "Voice ID cannot be empty.").default(DEFAULT_VOICE_ID),
+  // This 'voiceId' will be the Google Voice Name eventually.
+  // The backend GenerateVoiceOverAudioInputSchema now expects 'voiceName' and 'languageCode'.
+  voiceId: z.string().min(1, "Voice selection cannot be empty.").default(DEFAULT_VOICE_ID_PLACEHOLDER),
 });
 
 type VoiceOverFormValues = z.infer<typeof formSchema>;
@@ -66,16 +68,16 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     resolver: zodResolver(formSchema),
     defaultValues: {
       articleText: initialArticleText || "",
-      voiceId: DEFAULT_VOICE_ID, // Set default voice ID
+      voiceId: DEFAULT_VOICE_ID_PLACEHOLDER, // Use the new placeholder
     },
   });
 
    // UseEffect to reset form and audio when component mounts or initial text changes drastically
     useEffect(() => {
-      console.log("VoiceOverGenerator mounted or initialArticleText changed (using Edge TTS):", initialArticleText.substring(0, 50) + "...");
+      console.log("VoiceOverGenerator mounted or initialArticleText changed:", initialArticleText.substring(0, 50) + "..."); // Updated log
       form.reset({
           articleText: initialArticleText || "",
-          voiceId: form.getValues('voiceId') || DEFAULT_VOICE_ID // Keep existing voice or reset to default
+          voiceId: form.getValues('voiceId') || DEFAULT_VOICE_ID_PLACEHOLDER // Use the new placeholder
       });
       setAudioResult(null); // Reset audio result when text changes
       // Trigger validation after reset if needed
@@ -86,16 +88,33 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     useEffect(() => {
       async function fetchVoices() {
         try {
-          const voices = await getEdgeTTSVoiceList();
-          const voiceNames = voices.map((v) => v.voiceId); // assuming this is the correct field
-          setVoiceOptions(voiceNames);
+          // TODO: Adapt to Google TTS voice structure for the dropdown
+          // For now, this will fetch Google voices but the mapping to voiceOptions (string[]) will be basic.
+          // The actual Google voice objects are richer (name, languageCodes, ssmlGender).
+          const googleVoices: protos.google.cloud.texttospeech.v1.IVoice[] = await getGoogleTTSVoiceList(DEFAULT_LANGUAGE_CODE_PLACEHOLDER);
+          // Temporary mapping: just use voice names for now. UI will need proper update.
+          const voiceDisplayNames = googleVoices
+            .filter(v => v.name) // Ensure voice name exists
+            .map((v) => v.name as string); 
+          setVoiceOptions(voiceDisplayNames);
+          if (voiceDisplayNames.length > 0 && !form.getValues('voiceId')) {
+            // If current voiceId is default placeholder and we have new options, update to first available
+             form.setValue('voiceId', voiceDisplayNames[0]);
+          } else if (voiceDisplayNames.length === 0) {
+            setVoiceOptions([DEFAULT_VOICE_ID_PLACEHOLDER]); // Fallback if no voices loaded
+          }
         } catch (error) {
-          console.error("Failed to load Edge TTS voices:", error);
-          setVoiceOptions([DEFAULT_VOICE_ID]); // fallback
+          console.error("Failed to load Google TTS voices:", error);
+          setVoiceOptions([DEFAULT_VOICE_ID_PLACEHOLDER]); // Fallback
+          toast({
+            variant: "destructive",
+            title: "Failed to Load Voices",
+            description: "Could not fetch voice list from Google TTS. Using default.",
+          });
         }
       }
       fetchVoices();
-    }, []);
+    }, [form, toast]);
     
     
 
@@ -105,18 +124,22 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
     setAudioResult(null);
     toast({
         title: "Generating Voice-Over",
-        description: "Sending request to local Edge TTS...",
+        description: "Sending request to Google Cloud TTS...", // Updated description
         duration: 5000,
       });
 
     try {
-      // Construct the input for the Edge TTS flow
+      // Construct the input for the Google TTS flow
+      // The backend schema expects 'voiceName' and 'languageCode'.
+      // We'll pass values.voiceId as voiceName for now. Language code can be a default or derived.
       const flowInput: GenerateVoiceOverAudioInput = {
         articleText: values.articleText,
-        voiceId: values.voiceId,
+        voiceName: values.voiceId, // Assuming voiceId from form is now the Google voice name
+        languageCode: DEFAULT_LANGUAGE_CODE_PLACEHOLDER, // Or derive from selected voiceName if it contains lang code
       };
+      // TODO: A more robust way to get languageCode would be from the selected voice object if UI is updated.
 
-      console.log("Calling generateVoiceOverAudio (Edge TTS) flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' });
+      console.log("Calling generateVoiceOverAudio (Google TTS) flow with input:", { ...flowInput, articleText: flowInput.articleText.substring(0,50)+'...' });
 
       const result = await generateVoiceOverAudio(flowInput);
       console.log("Voice-over generation result:", result);
@@ -124,10 +147,10 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
 
       toast({
         title: "Voice-Over Generated",
-        description: "Successfully generated the voice-over audio using local Edge TTS.",
+        description: "Successfully generated the voice-over audio using Google Cloud TTS.", // Updated
       });
     } catch (error: any) {
-      console.error("Error generating voice-over (Edge TTS):", error);
+      console.error("Error generating voice-over (Google TTS):", error);
        const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred during voice-over generation.";
       toast({
         variant: "destructive",
@@ -163,8 +186,8 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
   return (
      <Card>
         <CardHeader>
-            <CardTitle>Voice-Over Generator (Local Edge TTS)</CardTitle>
-            <CardDescription>Generate voice-over audio from the article text using the locally available <code className='bg-muted px-1 rounded'>@andresaya/edge-tts</code> package.</CardDescription>
+            <CardTitle>Voice-Over Generator (Google Cloud TTS)</CardTitle> 
+            <CardDescription>Generate voice-over audio from the article text using Google Cloud Text-to-Speech.</CardDescription>
         </CardHeader>
         <CardContent>
              {!form.getValues('articleText') && !initialArticleText && (
@@ -184,63 +207,51 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                         <Textarea
                             placeholder="The formatted voice-over script will appear here once the article sections are generated..."
                             {...field}
-                            readOnly={!initialArticleText && !field.value}
+                            readOnly={!initialArticleText && !field.value} // Keep readOnly logic
                             className={`min-h-[250px] ${!initialArticleText && !field.value ? 'bg-muted' : 'bg-secondary/50'}`}
                             />
                         </FormControl>
                         <FormDescription>
-                          Review the script. Max {formSchema.shape.articleText._def.checks.find(c => c.kind === 'max')?.value.toLocaleString()} characters recommended. Current: {field.value?.length.toLocaleString() ?? 0}
+                          Review the script. Max characters for Google TTS per request is ~5000 (bytes). This app chunks at ~4800 characters. Current total: {field.value?.length.toLocaleString() ?? 0}
                         </FormDescription>
                         <FormMessage />
                     </FormItem>
                     )}
                 />
-                 {/* Voice ID Input */}
-
-               {/*  <FormField
-                    control={form.control}
-                    name="voiceId"
-                    render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Edge TTS Voice ID</FormLabel>
-                            <FormControl>
-                                <Input placeholder="e.g., en-US-AriaNeural" {...field} />
-                            </FormControl>
-                            <FormDescription>
-                                The voice model to use. Find available voices by running <code className='bg-muted px-1 rounded'>edge-tts voice-list</code> in your terminal.
-                            </FormDescription>
-                            <FormMessage />
-                        </FormItem>
-                    )}
-                    /> */}
-
-<FormField
-  control={form.control}
-  name="voiceId"
-  render={({ field }) => (
-    <FormItem>
-      <FormLabel>Edge TTS Voice</FormLabel>
-      <Select onValueChange={field.onChange} defaultValue={field.value}>
-        <FormControl>
-          <SelectTrigger>
-            <SelectValue placeholder="Select a voice" />
-          </SelectTrigger>
-        </FormControl>
-        <SelectContent>
-          {voiceOptions.map((voice) => (
-            <SelectItem key={voice} value={voice}>
-              {voice}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <FormDescription>
-        Pick from available Edge TTS voices. You can also run <code className="bg-muted px-1 rounded">edge-tts voice-list</code> in your terminal.
-      </FormDescription>
-      <FormMessage />
-    </FormItem>
-  )}
-/>
+                
+                {/* TODO: This voice selection needs to be fully updated for Google TTS voices */}
+                {/* It currently uses voiceOptions (string[]) which is populated with Google voice names */}
+                {/* but the form still submits a single 'voiceId' which is then used as 'voiceName' in backend. */}
+                {/* A proper implementation would store richer voice objects and allow selection of languageCode too. */}
+                <FormField
+                  control={form.control}
+                  name="voiceId" // This field will effectively be 'voiceName' for Google TTS
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Google TTS Voice</FormLabel>
+                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a Google voice" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {voiceOptions.length === 0 && <SelectItem value="loading" disabled>Loading voices...</SelectItem>}
+                          {voiceOptions.map((voiceName) => ( // voiceName is e.g., en-US-Wavenet-D
+                            <SelectItem key={voiceName} value={voiceName}>
+                              {voiceName} 
+                              {/* TODO: Display more user-friendly name, e.g., from a mapped object */}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        Select a Google Cloud TTS voice. The list is populated with available voices.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
 
                 <Button
@@ -283,21 +294,20 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
                             </a>
                         </Button>
                     </div>
-                     <p className="text-xs text-muted-foreground text-center">Audio generated successfully using Edge TTS. Play above or download the MP3 file.</p>
+                     <p className="text-xs text-muted-foreground text-center">Audio generated successfully using Google Cloud TTS. Play above or download the MP3 file.</p>
                 </div>
             )}
              {/* Show message if generation finished without error BUT no URI was returned */}
-           
-         {/*   { !isLoading && audioResult === null && form.formState.isSubmitSuccessful && (
+              {!isLoading && form.formState.isSubmitSuccessful && audioResult && !audioResult.audioDataUri && (
                 <div className="mt-6 pt-6 border-t text-center">
-                    <p className="text-destructive">Audio generation process completed, but no audio data was received. Please check console logs or try again.</p>
-                 </div>
-            )} */}
-
-              {!isLoading && form.formState.isSubmitSuccessful && (!audioResult || !audioResult.audioDataUri) && (
-                <div className="mt-6 pt-6 border-t text-center">
-                    <p className="text-destructive">Audio generation completed, but no audio was returned. Please check logs or try again.</p>
+                    <p className="text-destructive">Audio generation process completed, but no audio data URI was received. Please check console logs or try again.</p>
                 </div>
+             )}
+             {/* Show message if generation failed and audioResult is null (error handled by toast, but this is a fallback UI state) */}
+             {!isLoading && form.formState.isSubmitSuccessful && audioResult === null && (
+                 <div className="mt-6 pt-6 border-t text-center">
+                     <p className="text-muted-foreground">Audio generation process finished. Check notifications for status.</p>
+                 </div>
              )}
 
 
@@ -305,7 +315,7 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
              {isLoading && (
                  <div className="mt-6 pt-6 border-t text-center flex items-center justify-center gap-2 text-muted-foreground">
                      <Loader2 className="h-5 w-5 animate-spin" />
-                     <span>Processing audio request with local Edge TTS...</span>
+                     <span>Processing audio request with Google Cloud TTS...</span>
                  </div>
              )}
         </CardContent>
