@@ -99,9 +99,12 @@ function sanitizeTextForTTS(text: string): string {
 export async function getGoogleTTSVoiceList(
     languageCode?: string
 ): Promise<protos.google.cloud.texttospeech.v1.IVoice[]> {
+    const effectiveLanguageCode = languageCode || DEFAULT_GOOGLE_LANGUAGE_CODE;
+    console.log(`[Backend] getGoogleTTSVoiceList called for languageCode: ${languageCode}, effectiveLanguageCode sent to API: ${effectiveLanguageCode}`);
     try {
         const client = getTtsClient();
-        const [response] = await client.listVoices({ languageCode: languageCode || DEFAULT_GOOGLE_LANGUAGE_CODE });
+        const [response] = await client.listVoices({ languageCode: effectiveLanguageCode });
+        console.log(`[Backend] Google API returned ${response.voices?.length || 0} voices for languageCode ${effectiveLanguageCode}. First few: ${JSON.stringify(response.voices?.slice(0,3).map(v=>v.name))}`);
         return response.voices || [];
     } catch (err) {
         console.error("Error fetching Google TTS voice list:", err);
@@ -121,6 +124,7 @@ export type GenerateVoiceOverAudioInput = z.infer<typeof GenerateVoiceOverAudioI
 
 const GenerateVoiceOverAudioOutputSchema = z.object({
   audioDataUri: z.string().describe('The generated voice-over audio as a base64 data URI.'),
+  fileName: z.string().optional().describe('The name of the generated audio file (e.g., final_audio.mp3).'),
 });
 export type GenerateVoiceOverAudioOutput = z.infer<typeof GenerateVoiceOverAudioOutputSchema>;
 
@@ -211,7 +215,7 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
             if (tempDirForChunks) {
                 await fs.rm(tempDirForChunks, { recursive: true, force: true });
             }
-            return { audioDataUri };
+            return { audioDataUri, fileName: path.basename(chunkFilePaths[0]) };
         }
 
         // Concatenate audio chunks using ffmpeg
@@ -219,10 +223,11 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
         const fileListContent = chunkFilePaths.map(f => `file '${f.replace(/\\/g, '/')}'`).join('\n');
         await fs.writeFile(finalListPath, fileListContent);
 
-        const finalConcatenatedPath = path.join(tempDirForChunks, `final_audio_concat.mp3`);
+        const finalFileName = `final_audio_concat_${Date.now()}.mp3`;
+        const finalConcatenatedPath = path.join(tempDirForChunks, finalFileName);
         const ffmpegCommand = `ffmpeg -y -f concat -safe 0 -i "${finalListPath}" -map_metadata -1 -fflags +igndts -ar 24000 -ac 1 -b:a 48k "${finalConcatenatedPath}"`;
         
-        console.log(`Concatenating ${chunkFilePaths.length} audio chunks with ffmpeg...`);
+        console.log(`Concatenating ${chunkFilePaths.length} audio chunks with ffmpeg to ${finalFileName}...`);
         
         const { stdout: ffmpegStdout, stderr: ffmpegStderr } = await execAsync(ffmpegCommand, { timeout: 180000 });
         if (ffmpegStderr) console.warn("ffmpeg stderr:", ffmpegStderr);
@@ -243,7 +248,7 @@ async (input): Promise<GenerateVoiceOverAudioOutput> => {
             console.log(`Cleaned up temporary chunk directory: ${tempDirForChunks}`);
         }
 
-        return { audioDataUri };
+        return { audioDataUri, fileName: finalFileName };
 
     } catch (error: any) {
         console.error('Error caught in generateVoiceOverAudioFlow:', error);

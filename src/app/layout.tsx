@@ -3,7 +3,8 @@ import type {Metadata} from 'next';
 import {Geist, Geist_Mono} from 'next/font/google';
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
-import Header from '@/components/layout/Header'; // Assuming a Header component will be created
+import Header from '@/components/layout/Header';
+import { VideoWorkflowProvider } from '@/contexts/VideoWorkflowContext';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -31,11 +32,13 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen`}
         suppressHydrationWarning // Added to potentially fix hydration issues from extensions
         >
-        <Header />
-        <main className="flex-grow container mx-auto px-4 py-8">
-            {children}
-        </main>
-        <Toaster />
+        <VideoWorkflowProvider>
+          <Header />
+          <main className="flex-grow container mx-auto px-4 py-8">
+              {children}
+          </main>
+          <Toaster />
+        </VideoWorkflowProvider>
       </body>
     </html>
   );
