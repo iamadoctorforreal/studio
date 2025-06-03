@@ -1,384 +1,339 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect } from 'react';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-// Removed duplicate: import React, { useState, useEffect } from 'react'; 
-import { Loader2, Scissors, FileAudio, FileType } from 'lucide-react';
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Loader2 } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { useVideoWorkflow } from '@/contexts/VideoWorkflowContext';
-import { generateSrtChunkKeywords } from '@/ai/flows/generate-srt-chunk-keywords';
-import { generateSrtChunkSummary } from '@/ai/flows/generate-srt-chunk-summary';
-import { generateSrtFromAudio } from '@/ai/flows/generate-srt-from-audio';
-// Remove the fs import
-// import { promises as fs } from 'fs';
-import path from 'path';
-import { storageService } from '@/services/storage';
-interface SrtChunk {
-    startTime: string;
-    endTime: string;
-    text: string;
-    keywords?: string;
-    summary?: string;
+import { generateSrtChunkKeywords } from "@/ai/flows/generate-srt-chunk-keywords";
+import { generateSrtChunkSummary } from "@/ai/flows/generate-srt-chunk-summary";
+import createWhisper from "whisper-wasm"; // Import createWhisper as default
+import { useVideoWorkflow } from "@/contexts/VideoWorkflowContext"; 
+
+// Define a local Whisper type for the model instance
+type WhisperModelInstance = {
+  loadModel: (modelName: string) => Promise<any>; 
+  transcribe: (audioBuffer: Float32Array) => Promise<any>; 
+};
+
+type Chunk = {
+  startTime: string;
+  endTime: string;
+  text: string;
+  keywords: string;
+  summary: string;
+};
+
+function parseTimeToSeconds(time: string): number {
+  const [hours, minutes, rest] = time.split(":");
+  const [seconds, milliseconds] = rest.split(",");
+  return (
+    parseInt(hours) * 3600 +
+    parseInt(minutes) * 60 +
+    parseInt(seconds) +
+    parseInt(milliseconds) / 1000
+  );
 }
 
-const SrtChunker: React.FC = () => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingSrtGeneration, setIsLoadingSrtGeneration] = useState(false);
+function secondsToTime(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const milliseconds = Math.floor((seconds % 1) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(
+    secs
+  ).padStart(2, "0")},${String(milliseconds).padStart(3, "0")}`;
+}
+
+const SrtChunker = () => {
+  const { toast } = useToast();
+  const { generatedAudio } = useVideoWorkflow();
   const [srtFile, setSrtFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [gcsUri, setGcsUri] = useState<string>(""); // For manual GCS URI input
   const [originalContent, setOriginalContent] = useState<string>("");
-  const [chunkedSrt, setChunkedSrt] = useState<SrtChunk[] | null>(null);
-  const { toast } = useToast();
-  const { generatedAudio, clearGeneratedAudio } = useVideoWorkflow();
+  const [chunkedSrt, setChunkedSrt] = useState<Chunk[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingSrtGeneration, setIsLoadingSrtGeneration] = useState(false);
+  const [whisperModel, setWhisperModel] = useState<WhisperModelInstance | null>(null);
+  const [isWhisperLoading, setIsWhisperLoading] = useState(true);
+
+  useEffect(() => {
+    const loadWhisperModel = async () => {
+      setIsWhisperLoading(true);
+      try {
+        const whisperModule = await createWhisper(); 
+        // @ts-ignore - Assuming whisperModule has a 'whisper' property based on examples
+        if (!whisperModule || !whisperModule.whisper) {
+          console.error("Whisper module or whisper instance failed to load.");
+          toast({ title: "Whisper Load Failed", description: "Failed to initialize Whisper module.", variant: "destructive" });
+          setIsWhisperLoading(false);
+          return;
+        }
+        // @ts-ignore
+        const model = await whisperModule.whisper.loadModel("tiny");
+        setWhisperModel(model);
+        toast({ title: "Whisper Model Loaded", description: "Ready for audio transcription." });
+      } catch (error) {
+        console.error("Failed to load Whisper model:", error);
+        toast({ title: "Whisper Load Failed", description: String(error) || "Could not load Whisper model.", variant: "destructive" });
+      } finally {
+        setIsWhisperLoading(false);
+      }
+    };
+
+    loadWhisperModel();
+  }, [toast]);
 
   useEffect(() => {
     if (generatedAudio?.file) {
+      setAudioFile(generatedAudio.file);
       toast({
         title: "Voice-over Loaded",
-        description: `"${generatedAudio.fileName}" loaded from previous step. Generating SRT...`,
+        description: `"${generatedAudio.fileName}" loaded from previous step.`,
       });
-      setAudioFile(generatedAudio.file);
-      // Automatically trigger SRT generation
-      // Need to ensure handleGenerateSrtFromAudio can use the state `audioFile`
-      // which might not be updated immediately. So, pass the file directly or call after state update.
-      // For simplicity, we'll rely on a subsequent call or a small delay if direct call is problematic.
-      // Or, better, make handleGenerateSrtFromAudio accept a file.
-      // For now, let's set the state and then call it.
-      // The handleGenerateSrtFromAudio function will use the `audioFile` state.
-      // To ensure it uses the *new* audioFile, we can make it a dependency of another effect,
-      // or call it directly if we are sure the state update is processed.
-      // A direct call here might use the stale `audioFile` state.
-      // A more robust way:
-      // 1. Set audioFile state.
-      // 2. Have another useEffect that triggers when `audioFile` (from context) changes.
     }
-  }, [generatedAudio]); // React to changes in generatedAudio from context
-
-  // Effect to auto-trigger STT when audioFile is set from context
-  useEffect(() => {
-    if (audioFile && generatedAudio && audioFile.name === generatedAudio.fileName) {
-      // This check ensures we only auto-trigger for the file from context
-      handleGenerateSrtFromAudio(audioFile); // Pass the file to ensure it uses the correct one
-      clearGeneratedAudio(); // Clear from context after processing
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps 
-  }, [audioFile, generatedAudio]); // Dependencies: audioFile state and generatedAudio from context
+  }, [generatedAudio, toast]);
 
 
-  const handleSrtFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.name.endsWith('.srt')) {
+  const handleSrtFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
       setSrtFile(file);
-      setAudioFile(null); // Clear audio file if SRT is selected
       const reader = new FileReader();
-      reader.onload = (e) => {
-        setOriginalContent(e.target?.result as string);
-        setChunkedSrt(null); 
+      reader.onload = (event) => {
+        const content = event.target?.result as string;
+        setOriginalContent(content);
       };
       reader.readAsText(file);
-    } else {
-      setSrtFile(null);
-      setOriginalContent("");
-      setChunkedSrt(null);
-      toast({
-        variant: "destructive",
-        title: "Invalid File",
-        description: "Please select a valid .srt file.",
-      });
     }
   };
 
-  const handleAudioFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    const acceptedAudioTypes = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/ogg', 'audio/flac'];
-    if (file && acceptedAudioTypes.includes(file.type)) {
-      setAudioFile(file); // This will be a manually uploaded file
-      setSrtFile(null); 
-      setOriginalContent(""); 
-      setChunkedSrt(null);
-      if (generatedAudio) clearGeneratedAudio(); // Clear context if user uploads manually
-    } else {
-      setAudioFile(null);
-      toast({
-        variant: "destructive",
-        title: "Invalid Audio File",
-        description: "Please select a valid audio file (e.g., MP3, WAV, FLAC).",
-      });
+  const handleAudioFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setAudioFile(file);
     }
   };
 
-  // Modified to accept an optional file argument for direct processing from context
-  const handleGenerateSrtFromAudio = async (fileToProcess?: File | null) => {
-      const currentAudioFile = fileToProcess || audioFile;
-  
-      if (!currentAudioFile) {
-        toast({ title: "No Audio Source", description: "Please upload an audio file first.", variant: "destructive" });
-        return;
-      }
-  
-      setIsLoadingSrtGeneration(true);
-      setOriginalContent("");
-      setChunkedSrt(null);
-  
-      try {
-        // Create a FormData object
-        const formData = new FormData();
-        formData.append('file', currentAudioFile);
-  
-        // Upload directly to your API endpoint
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData
+  const handleGenerateSrtFromAudio = async () => {
+    if (!audioFile) {
+      toast({ title: "No Audio File", description: "Please upload an audio file first.", variant: "destructive" });
+      return;
+    }
+    if (isWhisperLoading || !whisperModel) {
+      toast({ title: "Whisper Model Not Ready", description: "Whisper model is still loading or failed to load. Please wait.", variant: "destructive" });
+      return;
+    }
+
+    setIsLoadingSrtGeneration(true);
+    setOriginalContent("");
+    setChunkedSrt(null);
+
+    try {
+      toast({ title: "Transcribing Audio", description: "Using Whisper to transcribe the audio file." });
+
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      const monoBuffer = audioBuffer.getChannelData(0);
+
+      const result = await whisperModel.transcribe(monoBuffer);
+
+      let srtContent = "";
+      let srtEntryIndex = 1;
+      if (result.segments && Array.isArray(result.segments)) {
+        result.segments.forEach((segment: any) => {
+          const startTime = secondsToTime(segment.start);
+          const endTime = secondsToTime(segment.end);
+          const text = segment.text.trim();
+          if (text) {
+            srtContent += `${srtEntryIndex}\n`;
+            srtContent += `${startTime} --> ${endTime}\n`;
+            srtContent += `${text}\n\n`;
+            srtEntryIndex++;
+          }
         });
-  
-        if (!response.ok) {
-          throw new Error('Failed to upload file');
-        }
-  
-        const { audioFileUri } = await response.json();
-  
-        // Now use the GCS URI for speech-to-text
-        const result = await generateSrtFromAudio({ audioFileUri, languageCode: 'en-US' });
-        setOriginalContent(result.srtContent);
-        toast({ title: "SRT Generated", description: `SRT content generated from audio file.` });
-      } catch (error: any) {
-        console.error('Error processing audio:', error);
-        toast({ 
-          variant: "destructive", 
-          title: "SRT Generation Failed", 
-          description: error.message 
-        });
-        setOriginalContent("");
-      } finally {
-        setIsLoadingSrtGeneration(false);
+      } else {
+         const fullText = result.text?.trim();
+         if (fullText) {
+            srtContent = `1\n00:00:00,000 --> ${secondsToTime(audioBuffer.duration)}\n${fullText}\n\n`;
+            toast({ title: "Transcription Warning", description: "Could not get segment timestamps. Using full text.", variant: "default" });
+         } else {
+             toast({ variant: "destructive", title: "Transcription Failed", description: "Whisper returned empty transcription." });
+         }
       }
+      setOriginalContent(srtContent);
+      toast({ title: "SRT Generated", description: "SRT content generated from audio." });
+    } catch (error: any) {
+      console.error('Error transcribing audio with Whisper:', error);
+      toast({
+        variant: "destructive",
+        title: "Transcription Failed",
+        description: `An error occurred: ${error.message}`
+      });
+    } finally {
+      setIsLoadingSrtGeneration(false);
+    }
   };
 
-  // Basic time string to seconds conversion
-  const timeToSeconds = (time: string): number => {
-          const parts = time.split(':');
-          const secondsParts = parts[2].split(',');
-          return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(secondsParts[0]) + parseInt(secondsParts[1]) / 1000;
-  };
+  const handleProcessAndChunkSrt = async () => {
+    if (!originalContent) {
+      toast({ title: "No SRT Content", description: "Please generate or upload SRT first.", variant: "destructive" });
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const lines = originalContent.split("\n");
+      const entries: { startTime: number; endTime: number; text: string }[] = [];
+      let currentEntry: Partial<{ startTime: number; endTime: number; text: string[] }> = {};
 
-  // Basic seconds to time string conversion
-    const secondsToTime = (seconds: number): string => {
-        const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-        const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-        const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-        const ms = Math.round((seconds % 1) * 1000).toString().padStart(3, '0');
-        return `${h}:${m}:${s},${ms}`;
-    };
+      for (const line of lines) {
+          if (line.match(/^\d+$/)) {
+              if (currentEntry.startTime !== undefined && currentEntry.endTime !== undefined && currentEntry.text) {
+                  entries.push({
+                      startTime: currentEntry.startTime,
+                      endTime: currentEntry.endTime,
+                      text: currentEntry.text.join(' ').trim()
+                  });
+              }
+              currentEntry = { text: [] };
+          } else if (line.includes('-->')) {
+              const [start, end] = line.split(' --> ');
+              currentEntry.startTime = parseTimeToSeconds(start.trim());
+              currentEntry.endTime = parseTimeToSeconds(end.trim());
+          } else if (line.trim() !== '' && currentEntry.text) {
+              currentEntry.text.push(line.trim());
+          }
+      }
+      if (currentEntry.startTime !== undefined && currentEntry.endTime !== undefined && currentEntry.text) {
+          entries.push({
+              startTime: currentEntry.startTime,
+              endTime: currentEntry.endTime,
+              text: currentEntry.text.join(' ').trim()
+          });
+      }
 
+      const chunks: Chunk[] = [];
+      if (entries.length > 0) {
+        let currentChunkStartTime = entries[0].startTime;
+        let currentChunkText = "";
+        let chunkEndTime = entries[0].startTime;
 
-  // SRT parsing and chunking logic (now called handleProcessAndChunkSrt)
-    const handleProcessAndChunkSrt = async () => {
-        if (!originalContent) {
-            toast({ title: "No SRT Content", description: "Please upload an SRT file or generate one from audio first.", variant: "destructive" });
-            return;
-        }
-
-        setIsLoading(true);
-        setChunkedSrt(null); // Clear previous chunks
-
-        // Simulate processing delay for chunking part if needed, or remove if AI calls are main delay
-        // await new Promise(resolve => setTimeout(resolve, 500)); 
-
-        try {
-            const lines = originalContent.split(/\r?\n/);
-            const entries: { startTime: number; endTime: number; text: string }[] = [];
-            let currentEntry: Partial<{ startTime: number; endTime: number; text: string[] }> = {};
-
-            for (const line of lines) {
-                if (line.match(/^\d+$/)) { // Sequence number
-                    if (currentEntry.startTime !== undefined) {
-                        entries.push({
-                           startTime: currentEntry.startTime,
-                           endTime: currentEntry.endTime!,
-                           text: currentEntry.text!.join(' ').trim()
-                        });
-                    }
-                    currentEntry = { text: [] };
-                } else if (line.includes('-->')) { // Timecodes
-                    const [start, end] = line.split(' --> ');
-                    currentEntry.startTime = timeToSeconds(start.trim());
-                    currentEntry.endTime = timeToSeconds(end.trim());
-                } else if (line.trim() !== '' && currentEntry.text) { // Text lines
-                    currentEntry.text.push(line.trim());
-                }
-            }
-            if (currentEntry.startTime !== undefined) { // Add last entry
-                 entries.push({
-                     startTime: currentEntry.startTime,
-                     endTime: currentEntry.endTime!,
-                     text: currentEntry.text!.join(' ').trim()
-                 });
-            }
-
-            // Chunking logic (simple example: combine entries within 15s blocks)
-            const chunks: SrtChunk[] = [];
-            let currentChunkStartTime = 0;
-            let currentChunkText = "";
-
-            if (entries.length === 0) {
-                 toast({ variant: "destructive", title: "Parsing Error", description: "Could not parse SRT file." });
-                 setIsLoading(false);
-                 return;
-            }
-
-
-            let chunkEndTime = entries[0].startTime;
-
-             for (const entry of entries) {
-                 if (entry.startTime < currentChunkStartTime + 15) {
-                     currentChunkText += (currentChunkText ? " " : "") + entry.text;
-                     chunkEndTime = Math.max(chunkEndTime, entry.endTime);
-                 } else {
-                     // Save previous chunk
-                     if (currentChunkText) {
-                        let keywordsResult = "N/A";
-                        let summaryResult = "N/A";
-                        try {
-                            const keywordsOutput = await generateSrtChunkKeywords({ chunkText: currentChunkText });
-                            keywordsResult = keywordsOutput.keywords.join(', ') || "N/A";
-                        } catch (e: any) {
-                            console.error("Error generating keywords:", e);
-                            toast({ variant: "destructive", title: "Keyword Generation Failed", description: e.message });
-                        }
-                        try {
-                            const summaryOutput = await generateSrtChunkSummary({ chunkText: currentChunkText });
-                            summaryResult = summaryOutput.summary || "N/A";
-                        } catch (e: any) {
-                            console.error("Error generating summary:", e);
-                            toast({ variant: "destructive", title: "Summary Generation Failed", description: e.message });
-                        }
-
-                        chunks.push({
-                            startTime: secondsToTime(currentChunkStartTime),
-                            endTime: secondsToTime(chunkEndTime),
-                            text: currentChunkText,
-                            keywords: keywordsResult,
-                            summary: summaryResult,
-                        });
-                     }
-                     // Start new chunk
-                     currentChunkStartTime = entry.startTime;
-                     currentChunkText = entry.text;
-                     chunkEndTime = entry.endTime;
-                 }
-             }
-
-            // Add the last chunk
-            if (currentChunkText) {
-                let keywordsResultLast = "N/A";
-                let summaryResultLast = "N/A";
-                try {
+        for (const entry of entries) {
+            if (entry.endTime <= currentChunkStartTime + 30) {
+                currentChunkText += (currentChunkText ? " " : "") + entry.text;
+                chunkEndTime = Math.max(chunkEndTime, entry.endTime);
+            } else {
+                if (currentChunkText) {
                     const keywordsOutput = await generateSrtChunkKeywords({ chunkText: currentChunkText });
-                    keywordsResultLast = keywordsOutput.keywords.join(', ') || "N/A";
-                } catch (e: any) {
-                    console.error("Error generating keywords for last chunk:", e);
-                    toast({ variant: "destructive", title: "Keyword Generation Failed", description: e.message });
-                }
-                try {
                     const summaryOutput = await generateSrtChunkSummary({ chunkText: currentChunkText });
-                    summaryResultLast = summaryOutput.summary || "N/A";
-                } catch (e: any) {
-                    console.error("Error generating summary for last chunk:", e);
-                    toast({ variant: "destructive", title: "Summary Generation Failed", description: e.message });
+                    chunks.push({
+                        startTime: secondsToTime(currentChunkStartTime),
+                        endTime: secondsToTime(chunkEndTime),
+                        text: currentChunkText,
+                        keywords: keywordsOutput.keywords.join(', ') || "N/A",
+                        summary: summaryOutput.summary || "N/A",
+                    });
                 }
-
-                chunks.push({
-                    startTime: secondsToTime(currentChunkStartTime),
-                    endTime: secondsToTime(chunkEndTime),
-                    text: currentChunkText,
-                    keywords: keywordsResultLast,
-                    summary: summaryResultLast,
-                });
+                currentChunkStartTime = entry.startTime;
+                currentChunkText = entry.text;
+                chunkEndTime = entry.endTime;
             }
-
-
-            setChunkedSrt(chunks);
-            toast({
-                title: "SRT Processed",
-                description: `Successfully chunked the SRT file. ${chunks.length > 0 ? 'Keywords and summaries generated.' : 'No chunks were generated.'}`,
-            });
-
-        } catch (error) {
-            console.error("Error processing SRT:", error);
-            toast({
-                variant: "destructive",
-                title: "Processing Failed",
-                description: "Could not process the SRT file.",
-            });
-        } finally {
-            setIsLoading(false);
         }
-    };
+        if (currentChunkText) { // Add the last chunk
+            const keywordsOutput = await generateSrtChunkKeywords({ chunkText: currentChunkText });
+            const summaryOutput = await generateSrtChunkSummary({ chunkText: currentChunkText });
+            chunks.push({
+                startTime: secondsToTime(currentChunkStartTime),
+                endTime: secondsToTime(chunkEndTime),
+                text: currentChunkText,
+                keywords: keywordsOutput.keywords.join(', ') || "N/A",
+                summary: summaryOutput.summary || "N/A",
+            });
+        }
+      }
+      setChunkedSrt(chunks);
+      toast({ title: "SRT Processed", description: `Successfully chunked SRT. ${chunks.length} chunks created.` });
+    } catch (error: any) {
+      console.error("Error processing SRT:", error);
+      toast({ variant: "destructive", title: "Processing Failed", description: error.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  const handleDownloadSrt = () => {
+    if (!originalContent) return;
+    const blob = new Blob([originalContent], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "transcript.srt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadChunkedSrt = () => {
+    if (!chunkedSrt || chunkedSrt.length === 0) return;
+    const content = chunkedSrt.map(c => `Chunk: ${c.startTime} - ${c.endTime}\nText: ${c.text}\nKeywords: ${c.keywords}\nSummary: ${c.summary}\n\n`).join('');
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "chunked_srt_data.txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <Card>
+    <Card className="w-full max-w-4xl mx-auto p-6">
       <CardHeader>
-        <CardTitle>SRT File Processor</CardTitle>
-        <CardDescription>
-          Upload an audio file to generate SRT, or upload an existing SRT file.
-          Then, chunk the SRT into 15-second blocks, extract keywords, and summarize each block.
-        </CardDescription>
+        <CardTitle>SRT Chunker</CardTitle>
+        <CardDescription>Upload an SRT or generate one from audio, then process into chunks.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-          <div className="space-y-2">
-            <Label htmlFor="audio-file" className="flex items-center gap-1"><FileAudio size={16}/> Upload Audio to Generate SRT</Label>
-            <Input id="audio-file" type="file" accept="audio/*" onChange={handleAudioFileChange} />
-            {audioFile && <p className="text-sm text-muted-foreground">Selected audio: {audioFile.name}</p>}
-            <Button onClick={() => handleGenerateSrtFromAudio()} disabled={!audioFile || isLoadingSrtGeneration || isLoading} className="w-full">
-              {isLoadingSrtGeneration ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileType className="mr-2 h-4 w-4" />}
-              Generate SRT from Audio
-            </Button>
+      <CardContent className="space-y-4">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor="srt-file-upload">Upload SRT File</Label>
+            <Input id="srt-file-upload" type="file" accept=".srt" onChange={handleSrtFileChange} />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="srt-file" className="flex items-center gap-1"><FileType size={16}/> Or Upload Existing SRT File</Label>
-            <Input id="srt-file" type="file" accept=".srt" onChange={handleSrtFileChange} />
-            {srtFile && <p className="text-sm text-muted-foreground">Selected SRT: {srtFile.name}</p>}
+          <div>
+            <Label htmlFor="audio-file-upload">Or Upload Audio File</Label>
+            <Input id="audio-file-upload" type="file" accept="audio/*" onChange={handleAudioFileChange} />
           </div>
         </div>
-
-        {originalContent && (
-            <div className="space-y-2 mt-6 pt-6 border-t">
-                 <Label>SRT Content (Preview)</Label>
-                <ScrollArea className="h-40 w-full rounded-md border p-2 bg-muted/30">
-                    <pre className="text-xs">{originalContent}</pre>
-                </ScrollArea>
-            </div>
-        )}
-
-        <Button onClick={handleProcessAndChunkSrt} disabled={!originalContent || isLoading || isLoadingSrtGeneration} className="w-full mt-4">
-          {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Scissors className="mr-2 h-4 w-4" />}
-          Process and Chunk SRT
+        <Button onClick={handleGenerateSrtFromAudio} disabled={!audioFile || isLoadingSrtGeneration || isWhisperLoading} className="w-full">
+          {isLoadingSrtGeneration || isWhisperLoading ? (
+            <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {isWhisperLoading ? "Loading Model..." : "Generating SRT..."}</>
+          ) : "Generate SRT From Audio"}
         </Button>
-
+        <Button onClick={handleProcessAndChunkSrt} disabled={isLoading || !originalContent} className="w-full">
+          {isLoading && !isLoadingSrtGeneration ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : "Process and Chunk SRT"}
+        </Button>
+        {originalContent && (
+          <Button onClick={handleDownloadSrt} variant="outline" className="w-full">Download Original SRT</Button>
+        )}
+        {chunkedSrt && chunkedSrt.length > 0 && (
+          <Button onClick={handleDownloadChunkedSrt} variant="outline" className="w-full">Download Chunked Data</Button>
+        )}
         {chunkedSrt && (
-          <div className="mt-6 pt-6 border-t">
-            <h3 className="text-lg font-semibold mb-2">Chunked SRT Results:</h3>
-             <ScrollArea className="h-72 w-full rounded-md border">
-                <div className="p-4 space-y-4">
-                    {chunkedSrt.map((chunk, index) => (
-                    <div key={index} className="p-3 bg-secondary rounded-md shadow-sm">
-                        <p className="text-sm font-mono text-muted-foreground">{chunk.startTime} --&gt; {chunk.endTime}</p>
-                        <p className="mt-1 text-sm">{chunk.text}</p>
-                         <p className="mt-2 text-xs"><strong>Keywords:</strong> {chunk.keywords || 'N/A'}</p>
-                         <p className="mt-1 text-xs"><strong>Summary:</strong> {chunk.summary || 'N/A'}</p>
-                    </div>
-                    ))}
-                </div>
-            </ScrollArea>
-          </div>
+          <ScrollArea className="h-96 border rounded p-4 mt-4">
+            {chunkedSrt.map((chunk, idx) => (
+              <div key={idx} className="mb-6 border-b pb-4">
+                <div className="text-sm text-muted-foreground mb-1">{chunk.startTime} → {chunk.endTime}</div>
+                <div className="font-medium mb-1">{chunk.text}</div>
+                <div className="text-xs"><strong>Keywords:</strong> {chunk.keywords}</div>
+                <div className="text-xs"><strong>Summary:</strong> {chunk.summary}</div>
+              </div>
+            ))}
+          </ScrollArea>
         )}
       </CardContent>
     </Card>
