@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState } from 'react';
@@ -18,11 +17,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, ArrowRight } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { generateArticleOutline } from '@/ai/flows/generate-article-outline';
 import type { GenerateArticleOutlineOutput } from '@/ai/flows/generate-article-outline';
-
 
 const formSchema = z.object({
   title: z.string().min(5, {
@@ -35,9 +33,9 @@ const formSchema = z.object({
 
 type OutlineFormValues = z.infer<typeof formSchema>;
 
-// Define props including the callback function
+// Make onOutlineGenerated optional
 interface OutlineGeneratorProps {
-    onOutlineGenerated: (title: string, outline: string, focusKeyPhrase: string) => void;
+    onOutlineGenerated?: (title: string, outline: string, focusKeyPhrase: string) => void;
 }
 
 const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ onOutlineGenerated }) => {
@@ -63,8 +61,10 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ onOutlineGenerated 
         title: "Outline Generated",
         description: "Successfully generated the article outline as a list.",
       });
-      // Call the callback with the generated data
-      onOutlineGenerated(values.title, result.outline, values.focusKeyPhrase);
+      // Only call onOutlineGenerated if it exists
+      if (onOutlineGenerated) {
+        onOutlineGenerated(values.title, result.outline, values.focusKeyPhrase);
+      }
     } catch (error) {
       console.error("Error generating outline:", error);
       toast({
@@ -76,13 +76,6 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ onOutlineGenerated 
       setIsLoading(false);
     }
   };
-
-  // Button is now handled by the callback setting the active tab in the parent
-  // const handleProceed = () => {
-  //     if (outlineResult) {
-  //        onOutlineGenerated(form.getValues('title'), outlineResult.outline, form.getValues('focusKeyPhrase'));
-  //     }
-  // };
 
   return (
     <Card>
@@ -140,13 +133,6 @@ const OutlineGenerator: React.FC<OutlineGeneratorProps> = ({ onOutlineGenerated 
                     value={outlineResult.outline}
                     className="min-h-[200px] bg-secondary text-secondary-foreground"
                     />
-                 {/* Removed proceed button, action now happens on submit success */}
-                 {/*
-                 <Button variant="secondary" onClick={handleProceed} disabled={!outlineResult}>
-                    Proceed to Section Generation
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                 </Button>
-                 */}
                 </div>
             )}
         </CardContent>
