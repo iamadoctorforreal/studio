@@ -33,7 +33,6 @@ const formSchema = z.object({
 
 type OutlineFormValues = z.infer<typeof formSchema>;
 
-// Make onOutlineGenerated optional
 interface OutlineGeneratorProps {
     onOutlineGenerated?: (title: string, outline: string, focusKeyPhrase: string) => void;
 }
