@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -454,41 +453,6 @@ const VoiceOverGenerator: React.FC<VoiceOverGeneratorProps> = ({ initialArticleT
         </CardContent>
     </Card>
   );
-};
-
-// Update the download handler
-const handleDownload = async (audioUri: string) => {
-const [currentLoading, setCurrentLoading] = useState<boolean>(false);
-  try {
-const [isLoading, setIsLoading] = useState(true);
-    // Fetch the audio file
-    const response = await fetch(audioUri);
-    if (!response.ok) throw new Error('Failed to fetch audio file');
-    
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    
-    // Create and trigger download
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'voice-over.mp3';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    // Cleanup
-    URL.revokeObjectURL(url);
-    
-  } catch (error) {
-    console.error('Error downloading file:', error);
-    toast({
-      title: "Download Failed",
-      description: "Failed to download the audio file. Please try again.",
-      variant: "destructive",
-    });
-  } finally {
-// Remove this line as setIsLoading is not defined in this scope
-  }
 };
 
 export default VoiceOverGenerator;

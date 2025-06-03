@@ -2,6 +2,11 @@ import { NextConfig } from 'next';
 
 const config: NextConfig = {
   webpack: (config, { isServer }) => {
+    // Add handlebars to externals for client-side builds
+    if (!isServer) {
+      config.externals = [...(config.externals || []), 'handlebars'];
+    }
+
     config.resolve.alias = {
       ...config.resolve.alias,
       '@ffmpeg/ffmpeg': '@ffmpeg/ffmpeg/dist/umd/ffmpeg.js',
