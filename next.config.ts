@@ -30,6 +30,23 @@ const config: NextConfig = {
       },
     ];
   },
+  images: {
+    domains: [
+      'picsum.photos',
+      'images.pexels.com',
+      'videos.pexels.com',
+      'storage.googleapis.com'
+    ],
+  },
+  // Serve uploaded files statically
+  async rewrites() {
+    return [
+      {
+        source: '/uploads/:path*',
+        destination: '/api/uploads/:path*',
+      },
+    ];
+  },
 };
 
 export default config;
