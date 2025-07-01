@@ -6,12 +6,10 @@
  */
 
 import { ai } from '@/ai/ai-instance';
-import { z } from 'genkit'; // Assuming genkit is used based on the template, adjust if it's a different Zod instance
+import { z } from 'zod';
 
 const GenerateSrtChunkKeywordsInputSchema = z.object({
   chunkText: z.string().describe('The text content of the SRT chunk.'),
-  // Optional: Add context if needed, e.g., overall topic of the video
-  // videoTopic: z.string().optional().describe('The overall topic of the video for better keyword relevance.'),
 });
 export type GenerateSrtChunkKeywordsInput = z.infer<
   typeof GenerateSrtChunkKeywordsInputSchema
@@ -30,8 +28,7 @@ const keywordsPrompt = ai.definePrompt({
     schema: GenerateSrtChunkKeywordsInputSchema,
   },
   output: {
-    // Instruct the model to output a JSON array of strings
-    format: 'json', // Important for structured output
+    format: 'json',
     schema: GenerateSrtChunkKeywordsOutputSchema,
   },
   prompt: `Given the following text segment from a video transcript, please generate approximately 5 relevant long-tail keywords.
@@ -61,11 +58,9 @@ export const generateSrtChunkKeywords = ai.defineFlow<
 
     if (!output || !output.keywords || !Array.isArray(output.keywords)) {
       console.error('Failed to generate keywords or output is not an array:', output);
-      // Return an empty array or throw a more specific error
       return { keywords: [] };
-      // Or: throw new Error('Failed to generate valid keywords array.');
     }
-    // Ensure all keywords are strings, filter out any non-string elements if necessary
+    
     const validKeywords = output.keywords.filter(kw => typeof kw === 'string');
     return { keywords: validKeywords };
   }
