@@ -6,12 +6,10 @@
  */
 
 import { ai } from '@/ai/ai-instance';
-import { z } from 'genkit'; // Assuming genkit is used
+import { z } from 'zod';
 
 const GenerateSrtChunkSummaryInputSchema = z.object({
   chunkText: z.string().describe('The text content of the SRT chunk.'),
-  // Optional: Add context if needed, e.g., overall topic of the video
-  // videoTopic: z.string().optional().describe('The overall topic of the video for better summary context.'),
 });
 export type GenerateSrtChunkSummaryInput = z.infer<
   typeof GenerateSrtChunkSummaryInputSchema
@@ -57,9 +55,7 @@ export const generateSrtChunkSummary = ai.defineFlow<
 
     if (!output || typeof output.summary !== 'string') {
       console.error('Failed to generate summary or output is not a string:', output);
-      // Return an empty summary or throw a more specific error
       return { summary: '' };
-      // Or: throw new Error('Failed to generate a valid summary string.');
     }
     return { summary: output.summary };
   }
