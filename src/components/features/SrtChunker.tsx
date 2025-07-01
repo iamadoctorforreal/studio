@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,14 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { generateSrtChunkKeywords } from "@/ai/flows/generate-srt-chunk-keywords";
 import { generateSrtChunkSummary } from "@/ai/flows/generate-srt-chunk-summary";
-import createWhisper from "whisper-wasm"; // Import createWhisper as default
 import { useVideoWorkflow } from "@/contexts/VideoWorkflowContext"; 
-
-// Define a local Whisper type for the model instance
-type WhisperModelInstance = {
-  loadModel: (modelName: string) => Promise<any>; 
-  transcribe: (audioBuffer: Float32Array) => Promise<any>; 
-};
 
 type Chunk = {
   startTime: string;
@@ -57,35 +50,6 @@ const SrtChunker = () => {
   const [chunkedSrt, setChunkedSrt] = useState<Chunk[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSrtGeneration, setIsLoadingSrtGeneration] = useState(false);
-  const [whisperModel, setWhisperModel] = useState<WhisperModelInstance | null>(null);
-  const [isWhisperLoading, setIsWhisperLoading] = useState(true);
-
-  useEffect(() => {
-    const loadWhisperModel = async () => {
-      setIsWhisperLoading(true);
-      try {
-        const whisperModule = await createWhisper(); 
-        // @ts-ignore - Assuming whisperModule has a 'whisper' property based on examples
-        if (!whisperModule || !whisperModule.whisper) {
-          console.error("Whisper module or whisper instance failed to load.");
-          toast({ title: "Whisper Load Failed", description: "Failed to initialize Whisper module.", variant: "destructive" });
-          setIsWhisperLoading(false);
-          return;
-        }
-        // @ts-ignore
-        const model = await whisperModule.whisper.loadModel("tiny");
-        setWhisperModel(model);
-        toast({ title: "Whisper Model Loaded", description: "Ready for audio transcription." });
-      } catch (error) {
-        console.error("Failed to load Whisper model:", error);
-        toast({ title: "Whisper Load Failed", description: String(error) || "Could not load Whisper model.", variant: "destructive" });
-      } finally {
-        setIsWhisperLoading(false);
-      }
-    };
-
-    loadWhisperModel();
-  }, [toast]);
 
   useEffect(() => {
     if (generatedAudio?.file) {
@@ -96,7 +60,6 @@ const SrtChunker = () => {
       });
     }
   }, [generatedAudio, toast]);
-
 
   const handleSrtFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -123,52 +86,32 @@ const SrtChunker = () => {
       toast({ title: "No Audio File", description: "Please upload an audio file first.", variant: "destructive" });
       return;
     }
-    if (isWhisperLoading || !whisperModel) {
-      toast({ title: "Whisper Model Not Ready", description: "Whisper model is still loading or failed to load. Please wait.", variant: "destructive" });
-      return;
-    }
 
     setIsLoadingSrtGeneration(true);
     setOriginalContent("");
     setChunkedSrt(null);
 
     try {
-      toast({ title: "Transcribing Audio", description: "Using Whisper to transcribe the audio file." });
+      toast({ title: "Transcribing Audio", description: "Using Hugging Face Whisper to transcribe the audio file." });
 
-      const arrayBuffer = await audioFile.arrayBuffer();
-      const audioCtx = new AudioContext();
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      const monoBuffer = audioBuffer.getChannelData(0);
+      const formData = new FormData();
+      formData.append('file', audioFile);
+      formData.append('languageCode', 'en-US');
 
-      const result = await whisperModel.transcribe(monoBuffer);
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData
+      });
 
-      let srtContent = "";
-      let srtEntryIndex = 1;
-      if (result.segments && Array.isArray(result.segments)) {
-        result.segments.forEach((segment: any) => {
-          const startTime = secondsToTime(segment.start);
-          const endTime = secondsToTime(segment.end);
-          const text = segment.text.trim();
-          if (text) {
-            srtContent += `${srtEntryIndex}\n`;
-            srtContent += `${startTime} --> ${endTime}\n`;
-            srtContent += `${text}\n\n`;
-            srtEntryIndex++;
-          }
-        });
-      } else {
-         const fullText = result.text?.trim();
-         if (fullText) {
-            srtContent = `1\n00:00:00,000 --> ${secondsToTime(audioBuffer.duration)}\n${fullText}\n\n`;
-            toast({ title: "Transcription Warning", description: "Could not get segment timestamps. Using full text.", variant: "default" });
-         } else {
-             toast({ variant: "destructive", title: "Transcription Failed", description: "Whisper returned empty transcription." });
-         }
+      if (!response.ok) {
+        throw new Error(`Transcription failed: ${response.statusText}`);
       }
-      setOriginalContent(srtContent);
+
+      const result = await response.json();
+      setOriginalContent(result.srtContent);
       toast({ title: "SRT Generated", description: "SRT content generated from audio." });
     } catch (error: any) {
-      console.error('Error transcribing audio with Whisper:', error);
+      console.error('Error transcribing audio:', error);
       toast({
         variant: "destructive",
         title: "Transcription Failed",
@@ -243,7 +186,7 @@ const SrtChunker = () => {
                 chunkEndTime = entry.endTime;
             }
         }
-        if (currentChunkText) { // Add the last chunk
+        if (currentChunkText) {
             const keywordsOutput = await generateSrtChunkKeywords({ chunkText: currentChunkText });
             const summaryOutput = await generateSrtChunkSummary({ chunkText: currentChunkText });
             chunks.push({
@@ -309,9 +252,9 @@ const SrtChunker = () => {
             <Input id="audio-file-upload" type="file" accept="audio/*" onChange={handleAudioFileChange} />
           </div>
         </div>
-        <Button onClick={handleGenerateSrtFromAudio} disabled={!audioFile || isLoadingSrtGeneration || isWhisperLoading} className="w-full">
-          {isLoadingSrtGeneration || isWhisperLoading ? (
-            <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {isWhisperLoading ? "Loading Model..." : "Generating SRT..."}</>
+        <Button onClick={handleGenerateSrtFromAudio} disabled={!audioFile || isLoadingSrtGeneration} className="w-full">
+          {isLoadingSrtGeneration ? (
+            <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating SRT...</>
           ) : "Generate SRT From Audio"}
         </Button>
         <Button onClick={handleProcessAndChunkSrt} disabled={isLoading || !originalContent} className="w-full">
